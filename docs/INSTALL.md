@@ -24,13 +24,7 @@ curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.2/dsb-installe
 
 The first run updates Termux's base libraries and installs Ubuntu 24.04, Node/dsh, Python/OCR and scrcpy, so it downloads a lot. The network must reach Termux, GitHub, Ubuntu, nodejs.org, npm and PyPI. You can interrupt with `Ctrl-C`; rerun `bash ~/dsb-installer/install.sh` to continue. Rerunning does not delete the container, sessions or key, and does not add SSH authorization twice.
 
-> **Known issue (Termux proot 5.1.107.99, released 2026-10-23)**: with this proot version, installing Ubuntu packages inside the container can stop with `proot warning: signal 11 received from process -1` (reproduced on an arm64 emulator; 5.1.107.98 works). The installer reports the failure and does not claim success. Until Termux ships a fix, install the previous version and hold it before running the command above, then rerun the installer:
->
-> ```bash
-> pkg install proot=5.1.107.98 && apt-mark hold proot
-> ```
->
-> Remove the hold with `apt-mark unhold proot` once a fixed proot is released (upstream: [termux/proot#420](https://github.com/termux/proot/issues/420)). If 5.1.107.98 is no longer available, check the DSB release notes for an update.
+> **Resolved**: Termux proot 5.1.107.99 (2026-10-23) could crash with `proot warning: signal 11 received from process -1` while installing Ubuntu packages in the container. It is fixed in proot 5.1.107.100 ([termux/proot#420](https://github.com/termux/proot/issues/420)); we re-checked the crashing install on an arm64 emulator. If you held proot to work around it, run `apt-mark unhold proot && pkg upgrade`.
 
 The official Ubuntu repositories use HTTPS. If the minimal image lacks CA certificates, Termux's trusted CAs are used first, and Ubuntu's `ca-certificates` package takes over afterwards. TLS and APT signature checks are not turned off; the original source configuration is backed up and custom sources are kept.
 
