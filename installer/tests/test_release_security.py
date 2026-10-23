@@ -1,5 +1,6 @@
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -13,6 +14,25 @@ spec.loader.exec_module(config)
 
 
 class ReleaseSecurity(unittest.TestCase):
+    def test_dependency_overrides_keep_dsh_pinned_and_remove_affected_packages(self):
+        manifest = json.loads((REPO / 'installer/dsh/package.json').read_text())
+        release = json.loads((REPO / 'installer/release.json').read_text())
+        lock = json.loads((REPO / 'installer/dsh/npm-shrinkwrap.json').read_text())
+        self.assertEqual(manifest['dependencies']['@deepseek-ai/dsh'], release['dsh_version'])
+        fixed = {'@modelcontextprotocol/sdk': '1.32.0', '@modelcontextprotocol/client': '2.3.0',
+                 'fflate': '0.8.3'}
+        self.assertEqual(manifest['overrides'], fixed)
+        found = set()
+        for path, package in lock['packages'].items():
+            name = path.rsplit('node_modules/', 1)[-1]
+            if name in fixed:
+                self.assertEqual(package['version'], fixed[name], path)
+                found.add(name)
+            if name == '@deepseek-ai/dsh':
+                self.assertEqual(package['version'], release['dsh_version'])
+        # The SDK is only an optional peer of genai; do not install it just to satisfy an audit.
+        self.assertTrue({'@modelcontextprotocol/client', 'fflate'} <= found)
+
     def test_signer_certificate_is_exact_and_not_only_package_name(self):
         spec = importlib.util.spec_from_file_location('certificate', REPO / 'installer/apk_certificate.py')
         certificate = importlib.util.module_from_spec(spec)

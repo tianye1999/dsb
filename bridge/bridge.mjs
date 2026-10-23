@@ -389,7 +389,7 @@ function maybeCompact() {
   if (compacting || !shouldCompact()) return;
   compacting = true;
   console.log('[compact] start (turns=%s)', memState.turns);
-  compactMemory().catch(e => console.log('[compact] error', String(e))).finally(() => { compacting = false; });
+  compactMemory().catch(e => logError('compact', e)).finally(() => { compacting = false; });
 }
 
 /** 让代理自己把长期记忆重写一遍：去重、合并、删过期 */
@@ -425,7 +425,7 @@ function appendTranscript(goal, answer) {
     fs.appendFileSync(TRANSCRIPT, JSON.stringify({ t: Date.now(), goal, answer: (answer || '').slice(0, 2000) }) + '\n');
     const lines = fs.readFileSync(TRANSCRIPT, 'utf8').split('\n').filter(Boolean);
     if (lines.length > 300) fs.writeFileSync(TRANSCRIPT, lines.slice(-300).join('\n') + '\n');
-  } catch (e) { console.log('[mem] append failed', String(e)); }
+  } catch (e) { logError('transcript-append', e); }
 }
 
 /** 生成记忆恢复用的开头（单独一轮，不碰用户原话） */
@@ -454,6 +454,31 @@ function readBody(req) {
     req.on('error', reject);
   });
 }
+
+function logError(scope, error) {
+  const previous = Error.prepareStackTrace;
+  try {
+    // Structured V8 frames exclude even multiline exception messages containing task text.
+    Error.prepareStackTrace = (_error, frames) => frames;
+    let frames = error instanceof Error ? error.stack : null;
+    if (!Array.isArray(frames)) frames = new Error().stack;
+    const type = ['Error', 'TypeError', 'RangeError', 'SyntaxError'].includes(error?.name) ? error.name : 'Error';
+    const locations = Array.isArray(frames) ? frames.map(frame =>
+      `${frame.getFileName()}:${frame.getLineNumber()}:${frame.getColumnNumber()}`).join('\n') : '';
+    console.error('[%s] %s\n%s', scope, type, locations);
+  } finally { Error.prepareStackTrace = previous; }
+}
+
+function clientError(error, fallback) {
+  logError('bridge-error', error);
+  for (const code of ['valid task_id required', 'duplicate task_id', 'task_busy',
+    'task_capacity_exhausted', 'task_state_unavailable', 'task_state_unknown_after_restart',
+    'task_mismatch', 'Task cancelled']) {
+    if (error?.message === code) return code;
+  }
+  return fallback;
+}
+
 function send(res, code, obj) {
   if (res.taskId) {
     obj = { ...obj, task_id: res.taskId, protocol: 2, transport_settled: false };
@@ -464,7 +489,7 @@ function send(res, code, obj) {
       } catch (e) {
         code = 503;
         obj = { ok: false, task_id: res.taskId, protocol: 2, transport_settled: false,
-          error: String(e), goal_status: 'unverified', goal_verified: false };
+          error: clientError(e, 'task_state_unavailable'), goal_status: 'unverified', goal_verified: false };
       }
     }
   }
@@ -493,7 +518,7 @@ const server = http.createServer(async (req, res) => {
       if (!runtime && [...ownedGroups].some(pid => !groupDrained(pid)))
         return send(res, 409, { ok: false, error: 'prior_execution_unknown' });
       try { taskLedger.admit(body.task_id); }
-      catch (e) { return send(res, 409, { ok: false, error: String(e), protocol: 2, transport_settled: false }); }
+      catch (e) { return send(res, 409, { ok: false, error: clientError(e, 'task_admission_failed'), protocol: 2, transport_settled: false }); }
       res.taskId = body.task_id;
     } else if (req.url !== '/cancel') {
       return send(res, 404, { ok: false, error: 'not found' });
@@ -517,7 +542,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ok: !!action, action, raw: r2.text.slice(0, 800), ms: r2.ms, image: img });
       }
       console.log('[step] ms=%s action=%s', r.ms, JSON.stringify(action));
-      return send(res, 200, { ok: r.ok && !!action, action, raw: (r.text || '').slice(0, 800), error: r.ok ? '' : r.err, ms: r.ms, image: img });
+      return send(res, 200, { ok: r.ok && !!action, action, raw: (r.text || '').slice(0, 800), error: r.ok ? '' : 'brain_error', ms: r.ms, image: img });
     }
 
     if (req.url.startsWith('/ask')) {
@@ -529,7 +554,7 @@ const server = http.createServer(async (req, res) => {
       if ((body.notifications || '').trim()) parts.push('最近的设备通知：\n' + body.notifications.trim());
       const r = await think(parts.join('\n\n'), img);
       checkGeneration(generation);
-      return send(res, 200, { ok: r.ok, text: r.text, error: r.ok ? '' : r.err, ms: r.ms, image: img });
+      return send(res, 200, { ok: r.ok, text: r.text, error: r.ok ? '' : 'brain_error', ms: r.ms, image: img });
     }
 
     if (req.url.startsWith('/do')) {
@@ -546,10 +571,9 @@ const server = http.createServer(async (req, res) => {
           goal_status: 'unverified', goal_verified: false,
           error: hasReply ? '' : 'Empty assistant reply', ms: Date.now() - started });
       } catch (e) {
-        console.log('[do] error', String(e));
         return send(res, 200, { ok: false, run_status: 'error',
           goal_status: 'unverified', goal_verified: false,
-          error: String(e), ms: Date.now() - started });
+          error: clientError(e, 'runtime_error'), ms: Date.now() - started });
       }
     }
 
@@ -583,7 +607,7 @@ const server = http.createServer(async (req, res) => {
 
     return send(res, 404, { error: 'not found', try: ['/health', '/step', '/ask', '/do', '/cancel'] });
   } catch (e) {
-    return send(res, 500, { ok: false, error: String(e) });
+    return send(res, 500, { ok: false, error: clientError(e, 'internal_error') });
   }
 });
 

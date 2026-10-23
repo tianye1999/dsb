@@ -12,7 +12,7 @@
 
 ## 怎么报告（How to report）
 
-**请不要公开开 issue。** 使用 GitHub 的私密漏洞报告（仓库页 → Security → Report a vulnerability）。
+**请不要公开开 issue。** 使用 GitHub 的[私密漏洞报告](https://github.com/tianye1999/dsb/security/advisories/new)（仓库页 → Security → Report a vulnerability）。
 请附上：复现步骤、影响范围、涉及的设备与 Android 版本。如果你有修复建议或 PoC，一并附上。
 
 这是个人维护的项目：我会尽量在 **7 天内** 确认收到，并在修复发布前与你同步进度；修复后在发布说明中致谢（除非你不希望）。
@@ -29,4 +29,4 @@ Only the latest release on the `main` branch receives security fixes.
 
 ---
 
-*English summary:* Report vulnerabilities privately via GitHub's "Report a vulnerability". In scope: execution-gate bypass, local control-plane auth bypass, task-ledger idempotency/stop failures, privacy leaks, and any mismatch between `docs/THREAT-MODEL.md` and real behaviour. Out of scope: attackers with physical access, root, authorized ADB, or Termux execution rights. Best-effort acknowledgement within 7 days.
+*English summary:* Report vulnerabilities privately via GitHub's ["Report a vulnerability"](https://github.com/tianye1999/dsb/security/advisories/new). In scope: execution-gate bypass, local control-plane auth bypass, task-ledger idempotency/stop failures, privacy leaks, and any mismatch between `docs/THREAT-MODEL.md` and real behaviour. Out of scope: attackers with physical access, root, authorized ADB, or Termux execution rights. Best-effort acknowledgement within 7 days.
