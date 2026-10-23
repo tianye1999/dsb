@@ -68,7 +68,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import zlib
 
 # 2026-10-01（P0-1 像素兜底）：容器侧 OCR（RapidOCR→tesseract 双引擎，见 skills/ocr.py）。
 # 空树页（微信/淘宝系）控件树为空时：look 附带像素文本、G2 在像素文本上重建禁区、
@@ -102,7 +101,7 @@ STATE = os.path.join(HERE, "safe_tap_state.json")
 AUDIT = os.path.join(HERE, "safe_tap_audit.jsonl")
 SHOTS = os.path.join(HERE, "safe_tap_shots")
 try:
-    from adb_endpoint import adb_target, transport_check, adb_command, EndpointUnavailable
+    from adb_endpoint import adb_target, transport_check, adb_command, EndpointUnavailable  # noqa: F401 - Probe the full endpoint API before selecting the legacy fallback.
 except ImportError:
     # 旧真机按单文件同步时仍可运行；不把缺模块伪装成已验证的新安装器部署。
     class EndpointUnavailable(RuntimeError):
@@ -1372,7 +1371,7 @@ def _r3_verify(cred_img, display_id, pt):
         if ia.size != ib.size:
             return {"ok": False, "diff": None, "why": "size %sx%s vs %sx%s" % (ia.size + ib.size)}
         w, h = ia.size
-        x, y = int(pt[0]), int(pt[1])
+        _x, y = int(pt[0]), int(pt[1])
         hh = max(24, int(h * R3_BAND))
         box = (0, max(0, y - hh), w, min(h, y + hh))
         diff = ImageStat.Stat(ImageChops.difference(ia.crop(box).resize((48, 16)),
@@ -1965,7 +1964,6 @@ def _do_action_locked(a, kind, points):
            "settle_ms": settle_ms, "settle_polls": settle_polls, "settled": settled,
            "shot_before": before, "shot_after": after,
            "shot_before_meta": before_meta, "shot_after_meta": after_meta,
-           "ack_no_zones": bool(getattr(a, "ack_no_zones", False)),
            "resolved_by": getattr(a, "resolved_by", None),
            "handle": getattr(a, "node_handle", None),
            "target_digest": _digest_at(points[0][0], points[0][1], last) if kind == "tap" else None,

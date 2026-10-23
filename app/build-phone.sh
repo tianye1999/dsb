@@ -32,7 +32,7 @@ LD_LIBRARY_PATH="$TERMUX_PREFIX/lib" "$TAAPT2" compile --dir "$PROJ/res" -o "$OU
 
 echo "== 2/6 javac =="
 mapfile -t SOURCES < <(find "$PROJ/src" -name '*.java')
-javac -encoding UTF-8 -source 11 -target 11 -nowarn -cp "$PLATFORM" -d "$OUT/classes" \
+javac -encoding UTF-8 --release 11 -Xlint:all -Werror -cp "$PLATFORM" -d "$OUT/classes" \
   "${SOURCES[@]}"
 
 echo "== 3/6 d8 打 dex =="

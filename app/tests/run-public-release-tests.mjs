@@ -178,7 +178,7 @@ test('actual BootReceiver ignores unknown actions before state access and preser
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, content);
     }
-    for (const [cmd, args] of [['javac', ['-encoding', 'UTF-8', '-d', dir, ...Object.keys(files).map(f => path.join(dir, f))]],
+    for (const [cmd, args] of [['javac', ['--release', '11', '-Xlint:all', '-Werror', '-encoding', 'UTF-8', '-d', dir, ...Object.keys(files).map(f => path.join(dir, f))]],
       ['java', ['-cp', dir, 'com.dsb.assistant.PublicBootTest']]]) {
       const result = spawnSync(cmd, args, { encoding: 'utf8', timeout: 30000 });
       assert.equal(result.status, 0, result.stdout + result.stderr);

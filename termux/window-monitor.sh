@@ -14,6 +14,8 @@ last_url() { "$P/grep" -o 'http://127.0.0.1:3080/?token=[A-Za-z0-9_-]*' "$LOG" 2
 echo "$(date +%s.%N) MONITOR_START" >> "$OUT"
 tcp_up_at=""
 ready_at=""
+# The iteration variable only bounds the observation window.
+# shellcheck disable=SC2034
 for i in $(seq 1 240); do
   now=$(date +%s.%N)
   if [ -z "$tcp_up_at" ] && port_up; then

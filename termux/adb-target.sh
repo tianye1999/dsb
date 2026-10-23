@@ -4,6 +4,8 @@ DSB_ADB_HOME=/data/data/com.termux/files/home
 [ ! -e "$DSB_ADB_HOME/dsb/adb-blocked" ] && [ ! -L "$DSB_ADB_HOME/dsb/adb-blocked" ] || {
   echo 'ADB_POLICY_PAUSED: ordinary transport conflict; run doctor' >&2; exit 78;
 }
+# These arrays are consumed by callers that source this file, not by this file itself.
+# shellcheck disable=SC2034
 if [ -e "$DSB_ADB_HOME/dsb/adb-target" ] || [ -e "$DSB_ADB_HOME/.dsb-installer-managed" ]; then
   DSB_ADB_ID=$(/data/data/com.termux/files/usr/bin/python3 -c \
     'import sys; sys.path.insert(0, sys.argv[1]); from adb_identity import read_binding; print(read_binding(sys.argv[1]+"/adb-transport.json")["transport_id"])' \

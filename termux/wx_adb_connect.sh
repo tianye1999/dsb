@@ -37,6 +37,8 @@ usable() {
 connect_and_verify() {
   local attempt
   usable "$1" && return 0
+  # The iteration variable only bounds retries; preserve the existing reconnect timing.
+  # shellcheck disable=SC2034
   for attempt in 1 2 3; do
     usable "$1" && return 0
     sleep 1

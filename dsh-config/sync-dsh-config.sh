@@ -48,7 +48,7 @@ case "${1:-}" in
     diff_one /root/.codex/config.toml codex-config.toml
     for p in "$SRC"/profiles/*/cordis.patch.yml; do
       [ -f "$p" ] || continue
-      n=$(basename $(dirname "$p"))
+      n=$(basename "$(dirname "$p")")
       diff_one "$p" "cordis.patch.$n.yml"
     done
     echo "  （无输出=一致）" ;;
@@ -59,12 +59,12 @@ case "${1:-}" in
     sync_one /root/.codex/config.toml codex-config.toml
     for p in "$SRC"/profiles/*/cordis.patch.yml; do
       [ -f "$p" ] || continue
-      n=$(basename $(dirname "$p"))
+      n=$(basename "$(dirname "$p")")
       sync_one "$p" "cordis.patch.$n.yml"
     done
     for p in "$SRC"/profiles/*/cordis.yml; do
       [ -f "$p" ] || continue
-      n=$(basename $(dirname "$p"))
+      n=$(basename "$(dirname "$p")")
       sync_one "$p" "cordis.$n.yml"
     done ;;
 esac

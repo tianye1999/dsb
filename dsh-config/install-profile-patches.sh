@@ -6,7 +6,8 @@ ROOT=${DSH_PROFILES_ROOT:-${DSH_HOME:-$HOME/.dsh}/profiles}
 [ "$(basename -- "$ROOT")" = profiles ] || { echo 'profile root must end in /profiles' >&2; exit 1; }
 mkdir -p "$ROOT"
 ROOT=$(cd -- "$ROOT" && pwd)
-export DSH_HOME=$(dirname -- "$ROOT")
+DSH_HOME=$(dirname -- "$ROOT")
+export DSH_HOME
 targets=()
 backups=()
 committed=false

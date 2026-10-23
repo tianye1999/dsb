@@ -12,7 +12,7 @@ PLATFORM=$ANDROID_HOME/platforms/android-35/android.jar
 TERMUX_PREFIX=${TERMUX_PREFIX:-/data/data/com.termux/files/usr}
 TAAPT2=${TAAPT2:-$TERMUX_PREFIX/bin/aapt2}
 mkdir -p "$OUT/classes" "$OUT/dex"
-javac -encoding UTF-8 -source 11 -target 11 -nowarn -cp "$PLATFORM" -d "$OUT/classes" "$PROJ"/tests/device/*.java
+javac -encoding UTF-8 --release 11 -Xlint:all -Werror -cp "$PLATFORM" -d "$OUT/classes" "$PROJ"/tests/device/*.java
 mapfile -t CLASSES < <(find "$OUT/classes" -name '*.class')
 "$BT/d8" --min-api 30 --lib "$PLATFORM" --output "$OUT/dex" "${CLASSES[@]}"
 LD_LIBRARY_PATH="$TERMUX_PREFIX/lib" "$TAAPT2" link -I "$PLATFORM" --manifest "$PROJ/tests/device/AndroidManifest.xml" -o "$OUT/test-base.apk"

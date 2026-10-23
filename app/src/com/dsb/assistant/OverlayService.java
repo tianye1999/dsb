@@ -270,6 +270,8 @@ public class OverlayService extends Service {
     }
 
     /** 当前前台应用的包名（拿不到就返回 null）。 */
+    // Deliberately retain the own-task fallback when accessibility has no foreground package.
+    @SuppressWarnings("deprecation")
     private String topPackage() {
         // 首选：无障碍服务记录的当前窗口包名（全系统可见，无需权限）
         // 次选：ActivityManager.getRunningTasks —— 但 Android 5+ 对第三方应用
@@ -365,6 +367,8 @@ public class OverlayService extends Service {
         } catch (Throwable ignored) {}
     }
 
+    // Retain the existing notification-removal path when a user-closed service restarts.
+    @SuppressWarnings("deprecation")
     @Override public void onCreate() {
         super.onCreate();
         markAppRunning(this);   // 记下"App 在这次开机会话里跑过"（分辨 ROM 补发的假开机）
@@ -408,6 +412,8 @@ public class OverlayService extends Service {
      * 这里明确收摊：移除球和面板、撤掉前台通知、停服务，也不让 START_STICKY 再把它拉起来。
      * （手机侧的 dsh 不动，它只是服务端；下次打开 App 球会再回来。）
      */
+    // The legacy stopForeground overload is confined to the existing API <24 fallback.
+    @SuppressWarnings("deprecation")
     @Override public void onTaskRemoved(Intent rootIntent) {
         markUserClosed(this);   // ⚠️ 先落盘：进程可能 3ms 后就被 SIGKILL（写晚了标记就丢）
         Log.i("DSH", "🧹 任务被划掉 → DSB 退出（收球、停服务、停手机侧 dsh）");
@@ -459,6 +465,8 @@ public class OverlayService extends Service {
      * 效果：不响、不弹横幅、状态栏无图标，只在你主动下拉通知栏时能看到一条，
      * 而且 Android 13+ 允许直接划掉它（划掉不影响服务）。
      */
+    // The channel-less builder is confined to the existing API <26 fallback.
+    @SuppressWarnings("deprecation")
     private Notification buildNotification() {
         String ch = "dsh_assistant_quiet";
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
@@ -921,6 +929,8 @@ public class OverlayService extends Service {
     }
 
     /** 横竖屏切换后保证面板还在可见区域（否则 y=380dp 可能落到横屏屏幕外） */
+    // Overlay coordinates use the full default display, not activity-window bounds.
+    @SuppressWarnings("deprecation")
     private void clampPanelPosition() {
         try {
             android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
@@ -934,6 +944,8 @@ public class OverlayService extends Service {
     }
 
     /** 悬浮球拖动结束后夹回屏幕内（横竖屏切换也不会丢） */
+    // Keep the same physical-display bounds as the overlay drag/gesture coordinates.
+    @SuppressWarnings("deprecation")
     private void clampBubblePosition() {
         try {
             android.util.DisplayMetrics dm = new android.util.DisplayMetrics();

@@ -171,7 +171,7 @@ def main():
         style = '<style id="dsh-composer-style">' + CSS + '</style>'
         pattern = r'<style id="dsh-composer-style">.*?</style>'
         if re.search(pattern, s, re.S):
-            s = re.sub(pattern, lambda _: style, s, flags=re.S)
+            s = re.sub(pattern, lambda _, style=style: style, s, flags=re.S)
         else:
             s = s.replace('</head>', style + '</head>', 1)
         if JS_RE.search(s):

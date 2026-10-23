@@ -103,7 +103,7 @@ def main():
         block = '<style id="dsh-content-rules">' + ''.join(RULES.values()) + '</style>'
         pattern = r'<style id="dsh-content-rules">.*?</style>'
         if re.search(pattern, s, re.S):
-            s = re.sub(pattern, lambda _: block, s, flags=re.S)
+            s = re.sub(pattern, lambda _, block=block: block, s, flags=re.S)
         else:
             s = s.replace('</head>', block + '</head>', 1)
         open(t, 'w', encoding='utf-8').write(s)

@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 import os
-import subprocess
 import sys
 import time
 import signal

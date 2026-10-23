@@ -84,7 +84,7 @@ class Dispatch(unittest.TestCase):
             with self.subTest(stdout=stdout):
                 self.reset()
                 rc, result, calls = self.run_action(
-                    lambda *a, **kw: subprocess.CompletedProcess(a, 0, stdout, stderr), "drag")
+                    lambda *a, stdout=stdout, stderr=stderr, **kw: subprocess.CompletedProcess(a, 0, stdout, stderr), "drag")
                 self.assertEqual(rc, 3)
                 self.assertEqual(result["reason"], "adb_error_output")
                 self.assertEqual(len(calls), 1)

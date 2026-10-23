@@ -2,6 +2,8 @@
 # 启动/检查手机端 dsh web，并自动用「已验证可用」的浏览器完成认证
 # 用法: start-dsh.sh [--restart]
 [ ! -e /data/data/com.termux/files/home/.dsb-ipc/maintenance ] || exit 0
+# If inherited as an exported variable, BROWSER is also passed to proot/dsh children.
+# shellcheck disable=SC2034
 BROWSER="com.obric.browser"      # ROM 自带浏览器(已验证能正确保存 dsh 的认证 cookie)
 # 2026-09-20 电池优先：默认不拿 Termux wakelock —— 实测它会让 CPU 24 小时不进入休眠，
 # 是"耗电快/发热"的主因（strace 到锁被持有了 1 天 1 小时）。日常不用它；
@@ -17,6 +19,8 @@ if port_up; then echo 'DSH_WEB_UP (already)'; else
   setsid nohup proot-distro login ubuntu -- /bin/bash -c \
     'export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; [ -f /root/.dsh/.glm-api-key ] && export ZAI_CODING_CN_API_KEY=$(cat /root/.dsh/.glm-api-key); export DEEPSEEK_API_KEY=$(cat /root/.dsh/.deepseek-key 2>/dev/null); mkdir -p /root/dsb-workspaces; cd /root/dsb-workspaces || exit 1; args=(); [ ! -f /root/dsh-config/installer.web.patch.yml ] || args=(--patch /root/dsh-config/installer.web.patch.yml); exec dsh web "${args[@]}" --host 127.0.0.1 --port 3080 --no-open' \
     >> "$HOME/dsh-web.log" 2>&1 &
+  # The iteration variable only bounds startup polling; do not change the timing.
+  # shellcheck disable=SC2034
   for i in $(seq 1 25); do sleep 3; port_up && break; done
   port_up || { echo DSH_WEB_FAILED; tail -n 12 "$HOME/dsh-web.log"; exit 1; }
   echo DSH_WEB_UP

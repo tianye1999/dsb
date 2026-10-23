@@ -221,17 +221,21 @@ class VdGateTests(_GateBase):
         self.assertIn("display_gone", why)
 
     def test_black_frame_refused(self):
-        st_ = json.load(open(st.STATE, encoding="utf-8"))
+        with open(st.STATE, encoding="utf-8") as state_file:
+            st_ = json.load(state_file)
         st_["last_shot"]["shot_black"] = True
-        json.dump(st_, open(st.STATE, "w", encoding="utf-8"))
+        with open(st.STATE, "w", encoding="utf-8") as state_file:
+            json.dump(st_, state_file)
         ok, why, _ = self.gate()
         self.assertFalse(ok)
         self.assertIn("黑图", why)
 
     def test_screencap_source_refused(self):
-        st_ = json.load(open(st.STATE, encoding="utf-8"))
+        with open(st.STATE, encoding="utf-8") as state_file:
+            st_ = json.load(state_file)
         st_["last_shot"]["shot_src"] = "screencap"
-        json.dump(st_, open(st.STATE, "w", encoding="utf-8"))
+        with open(st.STATE, "w", encoding="utf-8") as state_file:
+            json.dump(st_, state_file)
         ok, why, _ = self.gate()
         self.assertFalse(ok)
         self.assertIn("不是 App 按屏观测", why)
@@ -582,7 +586,8 @@ class MainDisplayRegressionTests(_GateBase):
     def test_main_display_does_not_need_session(self):
         st.vd = types.SimpleNamespace(verify=lambda sid=None: (_ for _ in ()).throw(
             AssertionError("主屏不该查虚拟屏会话")))
-        st_ = json.load(open(st.STATE, encoding="utf-8"))
+        with open(st.STATE, encoding="utf-8") as state_file:
+            st_ = json.load(state_file)
         st_["last_shot"].update({"display_id": 0, "fg": "com.x/.Main", "vd_sid": None,
                                  "main_fg": "com.x/.Main", "shot_src": "app"})
         st.foreground = lambda did=0, dump=None: "com.x/.Main"
@@ -870,10 +875,13 @@ class ScrcpyStartSafetyTests(unittest.TestCase):
                 patch.object(vd, "adb", side_effect=fake_adb), \
                 patch.object(vd, "_termux", side_effect=lambda cmd: termux_commands.append(cmd)), \
                 patch.object(vd, "display_ids", return_value=[0]), \
-                patch.object(vd, "save_session", side_effect=lambda s: saved.append(dict(s))):
+                patch.object(vd, "save_session", side_effect=lambda s: saved.append(dict(s))), \
+                patch("screen_guard.prepare", return_value={"ok": True}), \
+                patch.object(vd.subprocess, "run", side_effect=AssertionError("real device access")) as device_run:
             with self.assertRaisesRegex(vd.VDError, "resolve_failed"):
                 vd.start(self.args())
 
+        device_run.assert_not_called()
         self.assertEqual(foreign_overlay["value"], "1600x720/320")
         self.assertTrue(any("kill 12345" in cmd for cmd in termux_commands))
         self.assertTrue(any("session-test.mkv" in cmd for cmd in termux_commands))

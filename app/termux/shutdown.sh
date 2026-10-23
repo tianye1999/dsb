@@ -8,7 +8,6 @@
 #      （第一版就是这样，跑了没报错但一个进程都没杀）。
 # 下次打开 App / 重启手机时，boot.sh 会把它们重新拉起来（并补回看门狗）。
 PS=/system/bin/ps
-P=/data/data/com.termux/files/usr/bin
 H=/data/data/com.termux/files/home
 
 kill_pat() {   # 模式里的 [.] 是为了让 grep 不匹配到它自己

@@ -54,7 +54,7 @@ def main():
 
     buf2 = io.StringIO()
     with contextlib.redirect_stderr(buf2):
-        rc2 = s.cmd_tap(ns(allow_main=True, why="unit"))
+        s.cmd_tap(ns(allow_main=True, why="unit"))
     check("显式放行后不再因 VD 拒绝", "VD 策略" not in buf2.getvalue(), buf2.getvalue()[:80])
 
     s._foreground_on = lambda did=0: "com.dsb.assistant/.MainActivity"

@@ -21,6 +21,8 @@ bash "$ADBQ" shell "settings put secure enabled_accessibility_services '$filtere
 sleep 1
 bash "$ADBQ" shell "settings put secure enabled_accessibility_services '$current'"
 trap - EXIT
+# The iteration variable only bounds retries; retain the existing restoration timing.
+# shellcheck disable=SC2034
 for i in {1..15}; do
     if bash "$ADBQ" shell dumpsys accessibility | grep 'Bound services:' | grep -qE "$LABEL_RE"; then
         echo 'DSB existing accessibility binding restored'; exit 0

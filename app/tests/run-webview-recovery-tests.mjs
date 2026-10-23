@@ -66,7 +66,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsb-webview-recovery-'));
 try {
   const file = path.join(dir, 'WebViewRecoveryTest.java');
   fs.writeFileSync(file, fixture);
-  for (const [cmd, args] of [['javac', ['-encoding', 'UTF-8', '-d', dir, file]],
+  for (const [cmd, args] of [['javac', ['--release', '11', '-Xlint:all', '-Werror', '-encoding', 'UTF-8', '-d', dir, file]],
     ['java', ['-cp', dir, 'WebViewRecoveryTest']]]) {
     const result = spawnSync(cmd, args, { encoding: 'utf8', timeout: 30000 });
     process.stdout.write(result.stdout);

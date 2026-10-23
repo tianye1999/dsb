@@ -118,7 +118,7 @@ for t in targets:
             for selector, layer in ((r'#dsh-rail-toggle', 120),
                                     (r'html\[data-dsh-sidebar="full"\] \.pI_x6G_sidebarCol', 100)):
                 pattern = '(' + selector + r'\s*\{[^}]*?\bz-index\s*:\s*)[^;}]+'
-                style = re.sub(pattern, lambda m: m.group(1) + str(layer), style)
+                style = re.sub(pattern, lambda m, layer=layer: m.group(1) + str(layer), style)
             return style
         updated = re.sub(r'<style id="dsh-rail-style">.*?</style>', layers, s, flags=re.S)
         if updated != s:

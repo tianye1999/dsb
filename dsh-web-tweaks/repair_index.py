@@ -172,7 +172,7 @@ def main():
         block = '<style id="dsh-repair-style">' + LIGHT_CSS + THINK_CSS + CARD_CSS + '</style>'
         pattern = r'<style id="dsh-repair-style">.*?</style>'
         if re.search(pattern, s, re.S):
-            s = re.sub(pattern, lambda _: block, s, flags=re.S)
+            s = re.sub(pattern, lambda _, block=block: block, s, flags=re.S)
         else:
             s = s.replace('</head>', block + '</head>', 1)
         # ⚠️ 判据必须用完整 script 标签：CSS 注释里也含 'dsh-light-enforce'，

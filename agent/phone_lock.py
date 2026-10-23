@@ -85,7 +85,7 @@ class Busy:
         _broadcast("蓝")
         self._on = False
         if self.verbose:
-            print(f"  🔵 球→蓝（空闲）：手机交还给你", file=sys.stderr)
+            print("  🔵 球→蓝（空闲）：手机交还给你", file=sys.stderr)
 
     def back_to_dsb(self):
         """切回「逗沙包」对话界面。

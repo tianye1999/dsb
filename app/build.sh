@@ -10,16 +10,21 @@ fi
 OUT=$PROJ/build
 BT=$HOME/Library/Android/sdk/build-tools/35.0.0
 PLATFORM=$HOME/Library/Android/sdk/platforms/android-35/android.jar
-export JAVA_HOME=$(/usr/libexec/java_home -v 17 2>/dev/null || echo /Library/Java/JavaVirtualMachines/jdk-17.jdk/Contents/Home)
+JAVA_HOME=$(/usr/libexec/java_home -v 17 2>/dev/null || echo /Library/Java/JavaVirtualMachines/jdk-17.jdk/Contents/Home)
+export JAVA_HOME
 export PATH=$JAVA_HOME/bin:$PATH
 
 rm -rf $OUT && mkdir -p $OUT/classes $OUT/dex $OUT/res
 echo "== 1. aapt2 compile 资源 =="
 $BT/aapt2 compile --dir $PROJ/res -o $OUT/res.zip
 echo "== 2. javac =="
-javac -encoding UTF-8 -source 11 -target 11 -nowarn -cp "$PLATFORM" -d $OUT/classes $(find $PROJ/src -name '*.java')
+SOURCES=()
+while IFS= read -r -d '' f; do SOURCES+=("$f"); done < <(find "$PROJ/src" -name '*.java' -print0)
+javac -encoding UTF-8 --release 11 -Xlint:all -Werror -cp "$PLATFORM" -d "$OUT/classes" "${SOURCES[@]}"
 echo "== 3. d8 =="
-$BT/d8 --min-api 30 --lib "$PLATFORM" --output $OUT/dex $(find $OUT/classes -name '*.class')
+CLASSES=()
+while IFS= read -r -d '' f; do CLASSES+=("$f"); done < <(find "$OUT/classes" -name '*.class' -print0)
+$BT/d8 --min-api 30 --lib "$PLATFORM" --output "$OUT/dex" "${CLASSES[@]}"
 echo "== 4. aapt2 link =="
 $BT/aapt2 link -I "$PLATFORM" --manifest $PROJ/AndroidManifest.xml -o $OUT/base.apk \
   $OUT/res.zip --min-sdk-version 30 --target-sdk-version 34 --version-code 1 --version-name 1.0 \

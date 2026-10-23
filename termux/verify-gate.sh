@@ -18,6 +18,8 @@ echo "[$(date '+%H:%M:%S')] 调用 dsh-up.sh（会等 dsh 起来 + 等插件就�
 echo "  退出码=$?  $([ -s "$H/dsb/.verify-up.out" ] && echo "输出非空")"
 
 # 等监控器收尾
+# The iteration variable only bounds retries; keep the original polling interval.
+# shellcheck disable=SC2034
 for i in $(seq 1 20); do grep -q MONITOR_END "$H/dsb/startup-window.log" 2>/dev/null && break; sleep 0.5; done
 
 "$P/python3" - <<'PY'

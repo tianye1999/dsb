@@ -1,0 +1,7 @@
+required-version = "==0.17.2"
+target-version = "py311"
+
+[lint]
+# Defects only: Pyflakes, syntax/runtime errors, and selected Bugbear checks.
+# No formatting, import sorting, naming, or line-length rules.
+select = ["F", "E9", "B006", "B012", "B016", "B018", "B023", "B025", "B033"]

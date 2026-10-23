@@ -11,7 +11,7 @@ try {
   const source = path.join(root, 'app/src/com/dsb/assistant/TrustedFiles.java');
   const test = fileURLToPath(new URL('./TrustedFilesTest.java', import.meta.url));
   for (const [command, args] of [
-    [process.env.JAVAC || 'javac', ['-encoding', 'UTF-8', '-d', dir, source, test]],
+    [process.env.JAVAC || 'javac', ['--release', '11', '-Xlint:all', '-Werror', '-encoding', 'UTF-8', '-d', dir, source, test]],
     [process.env.JAVA || 'java', ['-cp', dir, 'com.dsb.assistant.TrustedFilesTest']],
   ]) {
     const result = spawnSync(command, args, { encoding: 'utf8', timeout: 60000 });
