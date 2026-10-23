@@ -58,6 +58,8 @@ jobs:
           python3 termux/test-dsh-up.py
       - name: permission-gated accessibility recovery checks
         run: node app/tests/run-accessibility-recovery-tests.mjs
+      - name: post-release path and speech hardening checks
+        run: node app/tests/run-post-release-tests.mjs
       - name: bounded trusted transport and App-private spool checks
         run: |
           python3 termux/test-trusted-entry.py

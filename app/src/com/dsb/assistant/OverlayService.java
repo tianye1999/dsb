@@ -1616,21 +1616,49 @@ public class OverlayService extends Service {
     private static final int OBS_KEEP_FILES = 40;           // look-* 最多留 40 个（约 32MB）
 
     private void writeAtomically(java.io.File out, String text) throws Exception {
+        out = checkedOutputFile(out);
         java.io.File tmp = new java.io.File(out.getParentFile(), out.getName() + ".tmp");
-        java.io.FileOutputStream fo = new java.io.FileOutputStream(tmp);
-        fo.write(text.getBytes("UTF-8"));
-        fo.close();
-        if (!tmp.renameTo(out)) { out.delete(); tmp.renameTo(out); }
+        try (java.io.OutputStream fo = openOutput(tmp)) {
+            fo.write(text.getBytes("UTF-8"));
+        }
+        java.nio.file.Files.move(tmp.toPath(), out.toPath(),
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
     }
 
     private void copyFile(java.io.File src, java.io.File dst) throws Exception {
-        java.io.FileInputStream in = new java.io.FileInputStream(src);
-        java.io.FileOutputStream out = new java.io.FileOutputStream(dst);
-        byte[] buf = new byte[65536];
-        int n;
-        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-        in.close();
-        out.close();
+        try (java.io.InputStream in = java.nio.file.Files.newInputStream(
+                    checkedOutputFile(src).toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS);
+             java.io.OutputStream out = openOutput(dst)) {
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        }
+    }
+
+    private java.io.OutputStream openOutput(java.io.File out) throws Exception {
+        return java.nio.file.Files.newOutputStream(checkedOutputFile(out).toPath(),
+                java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+                java.nio.file.StandardOpenOption.WRITE, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+    }
+
+    // All observation/receipt files must be direct children of the App's external files directory.
+    private java.io.File checkedOutputFile(java.io.File file) throws java.io.IOException {
+        java.io.File root = getExternalFilesDir(null);
+        if (root == null || file == null) throw new java.io.IOException("output_directory_unavailable");
+        for (java.nio.file.Path part : file.toPath()) {
+            if ("..".equals(part.toString())) throw new java.io.IOException("invalid_output_path");
+        }
+        java.nio.file.Path base = root.getCanonicalFile().toPath();
+        java.nio.file.Path target = file.getCanonicalFile().toPath();
+        java.io.File parent = file.getAbsoluteFile().getParentFile();
+        if (parent == null || !parent.toPath().normalize()
+                    .equals(root.getAbsoluteFile().toPath().normalize())
+                || !target.startsWith(base) || !base.equals(target.getParent())
+                || java.nio.file.Files.isSymbolicLink(file.toPath())) {
+            throw new java.io.IOException("invalid_output_path");
+        }
+        return file;
     }
 
     /** 只保留最近 OBS_KEEP_FILES 个 look-* 文件（每次观测约 0.8MB，不清会撑大） */
@@ -1723,6 +1751,7 @@ public class OverlayService extends Service {
     /** 统一观测入口：displayId=0 走主屏老路径；>0 走 AccessibilityService 的按屏 API。 */
     private void observeGraph(final int displayId, final String nonceI,
                               final boolean withImage, final boolean forceI) {
+        if (!validNonce(nonceI)) { log("invalid_observation_nonce"); return; }
         new Thread(new Runnable() { @Override public void run() {
             long t0I = System.currentTimeMillis();
             org.json.JSONObject reuseObj = null;
@@ -1760,9 +1789,9 @@ public class OverlayService extends Service {
                     w = bmp.getWidth(); h = bmp.getHeight();
                     black = isMostlyBlack(bmp);
                     ahash = aHash64(bmp);
-                    java.io.FileOutputStream fo = new java.io.FileOutputStream(new java.io.File(dir, jpgName));
-                    bmp.compress(Bitmap.CompressFormat.JPEG, 82, fo);
-                    fo.close();
+                    try (java.io.OutputStream fo = openOutput(new java.io.File(dir, jpgName))) {
+                        bmp.compress(Bitmap.CompressFormat.JPEG, 82, fo);
+                    }
                     bytes = (int) new java.io.File(dir, jpgName).length();
                 } else if (withImage) {
                     err = "capture_failed";
@@ -1838,6 +1867,7 @@ public class OverlayService extends Service {
     private void dispatchDisplayGesture(final AgentAccessibilityService acc, final int displayId,
                                         final String kind, final int x1, final int y1,
                                         final int x2, final int y2, final int ms, final String nonce) {
+        if (!validNonce(nonce)) { log("invalid_gesture_nonce"); return; }
         final java.io.File dir = getExternalFilesDir(null);
         if (dir == null) { log("❌ 没有外部文件目录，无法写手势回执"); return; }
         final java.io.File out = new java.io.File(dir, "gesture-" + nonce + ".json");

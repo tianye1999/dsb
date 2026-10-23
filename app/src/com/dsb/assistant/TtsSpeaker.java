@@ -408,7 +408,7 @@ public final class TtsSpeaker {
         s = s.replaceAll("(?m)^\\s{0,3}>\\s?", "");
         s = s.replaceAll("(?m)^\\s{0,3}[-*+]\\s+", "");
         s = s.replace("**", "").replace("__", "");
-        s = s.replaceAll("\\[([^\\]]*)\\]\\([^)]*\\)", "$1");   // 链接只留文字
+        s = cleanLinks(s);
         // URL 不念（又长又吵）
         s = s.replaceAll("https?://\\S+", " ");
         // 压缩空白
@@ -416,5 +416,24 @@ public final class TtsSpeaker {
         s = s.replaceAll("\\n{2,}", "\n");
         s = s.replaceAll(" {2,}", " ");
         return s.trim();
+    }
+
+    // Advance past each label/URL once, including malformed links; no regex backtracking.
+    private static String cleanLinks(String s) {
+        StringBuilder out = new StringBuilder(s.length());
+        int cursor = 0, copied = 0;
+        while (cursor < s.length()) {
+            int start = s.indexOf('[', cursor);
+            if (start < 0) break;
+            int labelEnd = s.indexOf(']', start + 1);
+            if (labelEnd < 0) break;
+            cursor = labelEnd + 1;
+            if (cursor >= s.length() || s.charAt(cursor) != '(') continue;
+            int end = s.indexOf(')', cursor + 1);
+            if (end < 0) break;
+            out.append(s, copied, start).append(s, start + 1, labelEnd);
+            cursor = copied = end + 1;
+        }
+        return out.append(s, copied, s.length()).toString();
     }
 }
