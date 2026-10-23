@@ -10,6 +10,136 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 class InstallerShellTests(unittest.TestCase):
+    def test_sourcing_installer_preserves_ld_environment_outside_doctor(self):
+        with tempfile.TemporaryDirectory() as d:
+            script = '''
+source "$REPO/install.sh"
+printf '%s\n' "${LD_FAKE:-missing}"
+'''
+            env = dict(HOME=d, PATH=os.environ['PATH'], REPO=str(REPO), LD_FAKE='termux-exec-like')
+            result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stdout.strip(), 'termux-exec-like')
+
+    def test_applied_v1_default_install_prints_rollback_first_and_stops(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / 'usr/var/lib/dsb-adb'
+            root.mkdir(parents=True)
+            (root / 'journal.json').write_text('{"tool_version":1,"state":"applied"}')
+            script = '''
+source "$REPO/install.sh"
+touch "$LOG"
+python3() {
+  [[ "$*" == *guard-legacy* ]] && return 0
+  command python3 "$@"
+}
+main_locked install
+'''
+            env = dict(HOME=d, PREFIX=str(Path(d) / 'usr'), PATH=os.environ['PATH'], REPO=str(REPO))
+            result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('先运行 bash install.sh rollback', result.stdout)
+
+    def test_doctor_reports_native_audit_error_without_inheriting_ld(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / 'usr/var/lib/dsb-adb'
+            root.mkdir(parents=True)
+            (root / 'manifest.json').write_text('{}')
+            script = '''
+source "$REPO/install.sh"
+touch "$LOG"
+python3() {
+  if [[ "$*" == *--policy-check* ]]; then
+    [ -z "${LD_FAKE:-}" ] || return 3
+    printf '%s\n' '{"ok":false,"error":"library drift"}'
+    return 2
+  fi
+  command python3 "$@"
+}
+doctor
+'''
+            env = dict(HOME=d, PREFIX=str(Path(d) / 'usr'), PATH=os.environ['PATH'],
+                       REPO=str(REPO), LD_FAKE='untrusted')
+            result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertIn('library drift', result.stdout)
+
+    def test_doctor_empty_native_audit_has_complete_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / 'usr/var/lib/dsb-adb'
+            root.mkdir(parents=True)
+            (root / 'manifest.json').write_text('{}')
+            script = '''
+source "$REPO/install.sh"
+touch "$LOG"
+python3() {
+  [[ "$*" == *--policy-check* ]] && return 2
+  command python3 "$@"
+}
+doctor
+'''
+            env = dict(HOME=d, PREFIX=str(Path(d) / 'usr'), PATH=os.environ['PATH'], REPO=str(REPO))
+            result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertIn('未返回详细原因', result.stdout)
+            self.assertNotIn('：；', result.stdout)
+
+    def test_rolled_back_apply_exit_selects_fresh_setup_before_second_apply(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / 'usr/var/lib/dsb-adb'
+            root.mkdir(parents=True)
+            (root / 'journal.json').write_text('{}')
+            script = '''
+source "$REPO/install.sh"
+touch "$LOG"
+setup_adb() { echo setup >> "$HOME/steps"; }
+python3() {
+  [[ "$*" == *"deploy.py apply"* ]] || { command python3 "$@"; return; }
+  if [ -f "$PREFIX/var/lib/dsb-adb/journal.json" ]; then
+    echo finish >> "$HOME/steps"
+    mv "$PREFIX/var/lib/dsb-adb" "$PREFIX/var/lib/archived"
+    return 3
+  fi
+  echo fresh >> "$HOME/steps"
+  mkdir -p "$PREFIX/var/lib/dsb-adb"
+  touch "$PREFIX/var/lib/dsb-adb/journal.json"
+  return 0
+}
+harden_adb
+'''
+            env = dict(HOME=d, PREFIX=str(Path(d) / 'usr'), PATH=os.environ['PATH'], REPO=str(REPO))
+            result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((Path(d) / 'steps').read_text().splitlines(),
+                             ['finish', 'setup', 'fresh', 'setup'])
+
+    def test_fresh_preflight_error_fails_but_skip_can_continue(self):
+        for result_code in (2, 0):
+            with self.subTest(result_code=result_code), tempfile.TemporaryDirectory() as d:
+                script = '''
+source "$REPO/install.sh"
+touch "$LOG"
+setup_adb() { echo setup >> "$HOME/steps"; }
+python3() {
+  [[ "$*" == *"deploy.py apply"* ]] || { command python3 "$@"; return; }
+  if [ "$RESULT_CODE" = 2 ]; then echo 'ADB_DEPLOY_ERROR：readelf 缺失'; return 2; fi
+  echo 'ADB 未加固（预检跳过）：Ubuntu rootfs 不存在'; return 0
+}
+harden_adb
+echo continued >> "$HOME/steps"
+'''
+                env = dict(HOME=d, PREFIX=str(Path(d) / 'usr'), PATH=os.environ['PATH'],
+                           REPO=str(REPO), RESULT_CODE=str(result_code))
+                result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+                if result_code == 2:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('预检', result.stdout)
+                    self.assertEqual((Path(d) / 'steps').read_text().splitlines(), ['setup'])
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn('ADB 未加固', result.stdout)
+                    self.assertEqual((Path(d) / 'steps').read_text().splitlines(), ['setup', 'continued'])
+
     def test_overlay_must_be_confirmed_before_enabling_accessibility(self):
         with tempfile.TemporaryDirectory() as d:
             script = '''

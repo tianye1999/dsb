@@ -36,7 +36,7 @@ def committed_sources():
 
 def stage_sources(stage, data):
     prefixes = ('installer/', 'hardening/', 'agent/', 'bridge/', 'termux/', 'dsh-config/', 'dsh-web-tweaks/')
-    docs = {'README.md', 'README.zh-CN.md', 'docs/INSTALL.md', 'docs/THREAT-MODEL.md', 'hardening/adb-private/README.md', 'agent/SKILL.md'}
+    docs = {'README.md', 'README.zh-CN.md', 'docs/INSTALL.md', 'docs/INSTALL.zh-CN.md', 'docs/THREAT-MODEL.md', 'docs/THREAT-MODEL.zh-CN.md', 'hardening/adb-private/README.md', 'hardening/adb-private/README.zh-CN.md', 'agent/SKILL.md'}
     with tarfile.open(fileobj=io.BytesIO(data), mode='r:') as archive:
         for member in archive.getmembers():
             name = member.name

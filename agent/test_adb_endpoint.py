@@ -7,6 +7,36 @@ import adb_endpoint as endpoint
 
 
 class TransportTests(unittest.TestCase):
+    def test_terminal_rolled_back_journal_uses_verified_ordinary_transport(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(endpoint, 'TERMUX_PREFIX', Path(d)), \
+             patch('subprocess.run', return_value=SimpleNamespace(returncode=0)) as run:
+            root = Path(d) / 'var/lib/dsb-adb'
+            root.mkdir(parents=True)
+            (root / 'journal.json').write_text('{"state":"rolled-back"}')
+            self.assertEqual(endpoint.transport_check()[0], 'warning')
+            self.assertIn('--check', run.call_args.args[0])
+            self.assertNotIn('--policy-check-fast', run.call_args.args[0])
+
+    def test_terminal_rolled_back_journal_never_uses_private_command_path(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(endpoint, 'TERMUX_PREFIX', Path(d)), \
+             patch.object(endpoint, 'TERMUX_HOME', Path(d) / 'home'):
+            root = Path(d) / 'var/lib/dsb-adb'
+            root.mkdir(parents=True)
+            (root / 'journal.json').write_text('{"state":"rolled-back"}')
+            receipt = Path(d) / 'home/dsb/adb-transport.json'
+            receipt.parent.mkdir(parents=True)
+            receipt.write_text('{"version":2,"transport_id":7}')
+            receipt.chmod(0o600)
+            self.assertIn('adb_identity.py', endpoint.adb_command()[2])
+
+    def test_private_check_uses_native_audit_receipt_and_fast_proot_budget(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(endpoint, 'TERMUX_PREFIX', Path(d)), \
+             patch('subprocess.run', return_value=SimpleNamespace(returncode=0, stdout='{"ok":true}')) as run:
+            (Path(d) / 'var/lib/dsb-adb').mkdir(parents=True)
+            self.assertEqual(endpoint.transport_check()[0], 'ok')
+            self.assertEqual(run.call_args.kwargs['timeout'], 12)
+            self.assertIn('--policy-check-fast', run.call_args.args[0])
+
     def test_smoke_resolves_command_on_each_call_without_running_device_smoke(self):
         import safe_tap_smoke as smoke
         commands = [['bound-helper', '-t', '7'], ['bound-helper', '-t', '8']]

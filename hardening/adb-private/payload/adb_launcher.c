@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+extern char **environ;
 
 #if !defined(ROOT_PATH) || !defined(SOCKET_PATH) || !defined(PYTHON)
 #error "安装时必须提供本机路径"
@@ -151,6 +152,17 @@ int main(int argc, char **argv) {
     command[2] = ROOT_PATH "/adb_policy.py";
     command[3] = "--policy-start";
     for (int i = 1; i < argc; ++i) command[i + 3] = argv[i];
+    /* Never expose caller loader overrides to the Python interpreter. */
+    for (size_t i = 0; environ[i];) {
+        if (strncmp(environ[i], "LD_", 3) != 0) { ++i; continue; }
+        char *name = strdup(environ[i]);
+        if (!name) return denied("cannot sanitize loader environment");
+        char *equals = strchr(name, '=');
+        if (equals) *equals = '\0';
+        int failed = unsetenv(name);
+        free(name);
+        if (failed) return denied("cannot sanitize loader environment");
+    }
     execv(command[0], command);
     fprintf(stderr, "ADB_POLICY_PAUSED: startup/exec gate: %s\n", strerror(errno));
     receipt();

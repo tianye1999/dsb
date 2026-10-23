@@ -6,7 +6,7 @@
 
 # 逗沙包（DSB）
 
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-2879D0.svg)](LICENSE) [![Android 11+](https://img.shields.io/badge/Android-11%2B-27875B.svg)](docs/INSTALL.md) [![No root](https://img.shields.io/badge/Root-Not_required-27875B.svg)](docs/INSTALL.md) [![CI](https://github.com/tianye1999/dsb/actions/workflows/test.yml/badge.svg)](https://github.com/tianye1999/dsb/actions/workflows/test.yml) [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15815/badge)](https://www.bestpractices.dev/projects/15815)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-2879D0.svg)](LICENSE) [![Android 11+](https://img.shields.io/badge/Android-11%2B-27875B.svg)](docs/INSTALL.zh-CN.md) [![No root](https://img.shields.io/badge/Root-Not_required-27875B.svg)](docs/INSTALL.zh-CN.md) [![CI](https://github.com/tianye1999/dsb/actions/workflows/test.yml/badge.svg)](https://github.com/tianye1999/dsb/actions/workflows/test.yml) [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15815/badge)](https://www.bestpractices.dev/projects/15815)
 
 **杂务归 AI，决策归人，注意力归生活。**
 
@@ -14,9 +14,9 @@
 
 像豆包手机、阶跃星辰手机那类「AI 替你操作手机」，但开源，装在你自己的手机上。你说「看看京东最新的订单到哪了」，它在后台翻订单，你继续喝茶、看书。
 
-逗沙包构建在开源的 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness)之上：**DSH 负责对话与推理，逗沙包负责手机端执行、风险拦截与审计**——后台虚拟屏、执行闸门、任务账本、审计与本地控制面都是本项目的部分。默认使用 DeepSeek；其他模型尚未纳入本项目的端到端验收与正式支持范围，见[路线图](docs/ROADMAP.md#其它想做的)。本项目不是 DeepSeek 官方项目。
+逗沙包构建在开源的 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness)之上：**DSH 负责对话与推理，逗沙包负责手机端执行、风险拦截与审计**——后台虚拟屏、执行闸门、任务账本、审计与本地控制面都是本项目的部分。默认使用 DeepSeek；其他模型尚未纳入本项目的端到端验收与正式支持范围，见[路线图](docs/ROADMAP.zh-CN.md#其它想做的)。本项目不是 DeepSeek 官方项目。
 
-[English](README.md) · [安装](docs/INSTALL.md) · [架构](docs/ARCHITECTURE.md) · [威胁模型](docs/THREAT-MODEL.md) · [路线图](docs/ROADMAP.md) · [安全策略](SECURITY.md)
+[English](README.md) · [安装](docs/INSTALL.zh-CN.md) · [架构](docs/ARCHITECTURE.zh-CN.md) · [威胁模型](docs/THREAT-MODEL.zh-CN.md) · [路线图](docs/ROADMAP.zh-CN.md) · [安全策略](SECURITY.zh-CN.md)
 
 ## 亮点
 
@@ -29,7 +29,7 @@
 - **隐私**：闸门视觉复核只发目标附近的裁剪图；剪贴板写入只记回执。
 - **本地控制面鉴权**：App 命令入口以系统权限校验发送方。
 - **大脑 DSH + DeepSeek（有视觉）**：理解与推理由手机上的 [DSH](https://github.com/deepseek-ai/deepseek-harness) 完成，默认调用 DeepSeek API；其他模型尚未纳入端到端验收与正式支持范围。
-- **安装**：一键安装器（候选版）负责环境、配对和授权引导，只需一个 DeepSeek Key；验证范围目前限于维护者的一台真机与 arm64 模拟器，通用安装器仍待完成冻结首装和不同 ROM 验收，见[安装说明](docs/INSTALL.md)。
+- **安装**：一键安装器（候选版）负责环境、配对和授权引导，只需一个 DeepSeek Key；验证范围目前限于维护者的一台真机与 arm64 模拟器，通用安装器仍待完成冻结首装和不同 ROM 验收，见[安装说明](docs/INSTALL.zh-CN.md)。
 
 > **边界先说清：** 闸门不是绝对保证、哪些数据会离开手机——见[边界与数据流（请先读）](#边界与数据流请先读)。
 
@@ -48,7 +48,7 @@
 | **不做两遍，停得下来** | 任务按 `task_id` 幂等，确认执行进程全部退出后才报告停止。 |
 | **事后查得清** | 审计记录动作结果、放行 / 拒绝原因与截图证据。 |
 | **不打扰你** | 第三方 App 默认通过 scrcpy 后台虚拟屏操作。 |
-| **目标：别人指挥不了它** | `CmdReceiver` 要求发送方持有 `INJECT_EVENTS` 系统权限；安装器默认尝试 [ADB 私有传输加固](hardening/adb-private/README.md)，预检跳过会警告，不冒充已加固。 |
+| **目标：别人指挥不了它** | `CmdReceiver` 要求发送方持有 `INJECT_EVENTS` 系统权限；安装器默认尝试 [ADB 私有传输加固](hardening/adb-private/README.zh-CN.md)，预检跳过会警告，不冒充已加固。 |
 
 极简生活是果，可信委托是因。
 
@@ -70,41 +70,41 @@
   <img src="docs/assets/how-it-works.zh.svg" alt="你经 App 网页或悬浮球下任务，任务桥核验账本后交给 dsh + DeepSeek。look 发凭据，G1–G4 与 G2b 检查动作，R3 派发前复核，经无障碍操作后台虚拟屏，G5 前后截图审计。只有闸门视觉复核和定位限定裁剪图；其他大脑路径可读取整屏。" width="1280">
 </picture>
 
-详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+详见 [docs/ARCHITECTURE.zh-CN.md](docs/ARCHITECTURE.zh-CN.md)。
 
 ## 安装
 
 安装器 v1（候选版）部署 Termux 内的 Ubuntu、Node/dsh、Python/OCR、scrcpy、网页品牌与本仓库运行文件，默认尝试 ADB 私有传输加固。需要 Android 11+、64 位手机，不用 root；唯一服务配置是 DeepSeek API Key，隐藏输入一次。
 
-实际步骤：**装官方 Termux 和逗沙包 → Termux 跑一条命令 → 填 Key → 按系统提示本人配对/授权 → doctor**。完整命令、续装和回滚见 [docs/INSTALL.md](docs/INSTALL.md)。
+实际步骤：**装官方 Termux 和逗沙包 → Termux 跑一条命令 → 填 Key → 按系统提示本人配对/授权 → doctor**。完整命令、续装和回滚见 [docs/INSTALL.zh-CN.md](docs/INSTALL.zh-CN.md)。
 
-设备标识、连接目标与固定端口是否需要调整，见[设备相关数值](docs/INSTALL.md#设备相关数值哪些需要调整)。
+设备标识、连接目标与固定端口是否需要调整，见[设备相关数值](docs/INSTALL.zh-CN.md#设备相关数值哪些需要调整)。
 
 ```bash
-curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.1/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' '75eefd896640eb6d59ee2481deeab2f657423f2ef3dbc9a39d0e53fd5ad2b23e' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
+curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.2/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' 'd1a782b337802c24b29ab36cdb0dfb3ac8e79b45e826b789ef5e773d4fc08553' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
 ```
 
-下载命令内联了发布包的 SHA-256（与 [v1.0.1 Release](https://github.com/tianye1999/dsb/releases/tag/v1.0.1) 附带的 `SHA256SUMS` 一致），校验不通过就不会解包执行。APK 用维护者现有发布密钥签名，安装器按固定的证书 SHA-256 验签后才接受。「装一个 App 就够」的全合一 APK 仍在[路线图](docs/ROADMAP.md)上。
+下载命令内联了发布包的 SHA-256（与 [v1.0.2 Release](https://github.com/tianye1999/dsb/releases/tag/v1.0.2) 附带的 `SHA256SUMS` 一致），校验不通过就不会解包执行。APK 用维护者现有发布密钥签名，安装器按固定的证书 SHA-256 验签后才接受。「装一个 App 就够」的全合一 APK 仍在[路线图](docs/ROADMAP.zh-CN.md)上。
 
 ## 路线图（计划中，未实现）
 
-桌面小组件 · 本机唤醒词（不上传录音） · 语音交互（ASR + TTS） · 可替换的大脑底座 · 一键安装器 · 全合一 APK。详见 [docs/ROADMAP.md](docs/ROADMAP.md)。
+桌面小组件 · 本机唤醒词（不上传录音） · 语音交互（ASR + TTS） · 可替换的大脑底座 · 一键安装器 · 全合一 APK。详见 [docs/ROADMAP.zh-CN.md](docs/ROADMAP.zh-CN.md)。
 
-**可信加固（计划中、未实现）**：整屏问答裁剪优先 / 可关闭整屏上传、视觉异常时空树页点击拒绝、审计自由文本脱敏，见[可信加固路线图](docs/ROADMAP.md#可信加固兑现更强承诺)。
+**可信加固（计划中、未实现）**：整屏问答裁剪优先 / 可关闭整屏上传、视觉异常时空树页点击拒绝、审计自由文本脱敏，见[可信加固路线图](docs/ROADMAP.zh-CN.md#可信加固兑现更强承诺)。
 
 ## 边界与数据流（请先读）
 
 ### 闸门会误判，视觉异常时仍可能回退放行
 
-OCR 可能漏读，视觉也可能判断错。空控件树页的 OCR 不可用时会拒绝；视觉返回 `external` / `irreversible` / `unclear` 时也会拒绝。**视觉服务异常时，如果 OCR 未检出危险词、调用方已确认看过截图且其余闸门条件满足，当前代码仍可能仅凭 OCR 放行**；如果已检出危险词则拒绝。因此不能把闸门当作绝对安全保证，也不能把整个系统称为全部 fail-closed。依据：[OCR 检查](agent/safe_tap.py#L1470)、[视觉判断与回退分支](agent/safe_tap.py#L1514)。
+OCR 可能漏读，视觉也可能判断错。空控件树页的 OCR 不可用时会拒绝；视觉返回 `external` / `irreversible` / `unclear` 时也会拒绝。**视觉服务异常时，如果 OCR 未检出危险词、调用方已确认看过截图且其余闸门条件满足，当前代码仍可能仅凭 OCR 放行**；如果已检出危险词则拒绝。因此不能把闸门当作绝对安全保证，也不能把整个系统称为全部 fail-closed。依据：[OCR 检查](agent/safe_tap.py#L1477)、[视觉判断与回退分支](agent/safe_tap.py#L1516)。
 
 ### 大脑与闸门没有强隔离
 
-大脑、闸门和凭据处在同一个 Termux Linux 用户下。闸门用于约束大脑误操作，不能防住已被攻破的大脑改写或绕过闸门；屏幕动作审计也不等于所有 bash 命令都被审计。依据：[大脑进程的运行权限](bridge/bridge.mjs#L122)；完整信任边界见[威胁模型](docs/THREAT-MODEL.md#信任边界)。
+大脑、闸门和凭据处在同一个 Termux Linux 用户下。闸门用于约束大脑误操作，不能防住已被攻破的大脑改写或绕过闸门；屏幕动作审计也不等于所有 bash 命令都被审计。依据：[大脑进程的运行权限](bridge/bridge.mjs#L122)；完整信任边界见[威胁模型](docs/THREAT-MODEL.zh-CN.md#信任边界)。
 
 ### 裁剪图承诺不覆盖整屏问答
 
-闸门视觉复核只发送目标附近裁剪图，视觉定位只发送指定区域裁剪图，见[复核裁剪](agent/vision_check.py#L36)与[定位裁剪](agent/vision_check.py#L114)。**「问 DSH」另有整屏路径**：App 将整屏截图、控件树、最近通知交给大脑；API 模式直接把整屏上传到默认的 DeepSeek API，dsh 路径也会被引导用 `read_image` 读取完整截图。dsh 内部图片传输实现不在本仓库，不能据此承诺只外发裁剪图。任务和页面文本也可能进入云端模型；dsh 在手机上运行，不代表模型离线运行。依据：[App 问答输入](app/src/com/dsb/assistant/OverlayService.java#L2241)、[问答桥接](bridge/bridge.mjs#L523)、[API 上传](bridge/bridge.mjs#L144)、[dsh 看图入口](bridge/bridge.mjs#L170)。
+闸门视觉复核只发送目标附近裁剪图，视觉定位只发送指定区域裁剪图，见[复核裁剪](agent/vision_check.py#L36)与[定位裁剪](agent/vision_check.py#L114)。**「问 DSH」另有整屏路径**：App 将整屏截图、控件树、最近通知交给大脑；API 模式直接把整屏上传到默认的 DeepSeek API，dsh 路径也会被引导用 `read_image` 读取完整截图。dsh 内部图片传输实现不在本仓库，不能据此承诺只外发裁剪图。任务和页面文本也可能进入云端模型；dsh 在手机上运行，不代表模型离线运行。依据：[App 问答输入](app/src/com/dsb/assistant/OverlayService.java#L2273)、[问答桥接](bridge/bridge.mjs#L548)、[API 上传](bridge/bridge.mjs#L144)、[dsh 看图入口](bridge/bridge.mjs#L170)。
 
 ### TypeSafe 是另一条可选的云端判定路径
 
@@ -123,11 +123,11 @@ OCR 可能漏读，视觉也可能判断错。空控件树页的 OCR 不可用�
 
 ### 审计不是自动脱敏的保险箱
 
-剪贴板写入回执只记操作、结果、长度等元数据，不记剪贴板原文，见[回执核验](agent/safe_tap.py#L2214)；粘贴后会尝试清空并核验回执，清空失败也会记录，不能视为必然成功，见[清空流程](agent/safe_tap.py#L2252)。这**不等于所有日志零原文**：审计中的 `note` / `expect` / 视觉解释没有统一脱敏，可能带入聊天、订单等页面内容；动作前后截图与问答截图也会在本机落盘。分享日志、截图前应先检查敏感内容。依据：[审计直接序列化](agent/safe_tap.py#L349)、[动作记录字段](agent/safe_tap.py#L1923)、[问答截图落盘](bridge/bridge.mjs#L87)。
+剪贴板写入回执只记操作、结果、长度等元数据，不记剪贴板原文，见[回执核验](agent/safe_tap.py#L2233)；粘贴后会尝试清空并核验回执，清空失败也会记录，不能视为必然成功，见[清空流程](agent/safe_tap.py#L2252)。这**不等于所有日志零原文**：审计中的 `note` / `expect` / 视觉解释没有统一脱敏，可能带入聊天、订单等页面内容；动作前后截图与问答截图也会在本机落盘。分享日志、截图前应先检查敏感内容。依据：[审计直接序列化](agent/safe_tap.py#L369)、[动作记录字段](agent/safe_tap.py#L1943)、[问答截图落盘](bridge/bridge.mjs#L87)。
 
 ### 控制面收口仍有部署与验收缺口
 
-App 命令入口要求 `INJECT_EVENTS` 系统权限；任务通道使用 Termux `RUN_COMMAND` 与私有套接字。维护者设备于 2026-10-23 迁移到与安装器相同的私有传输布局，并通过含一次重启的验收：重启后只起一个受管 server，自动重新核验并绑定，doctor、后台虚拟屏与真实任务均通过；软件包升级后的验收尚未做，在途任务仍有单独验收边界。仓库安装器从首次配对起使用私有 bootstrap，并默认尝试收紧 ADB；预检跳过或回滚后的普通 TCP 是较弱回退，不能忽略「ADB 未加固」警告。公开工具仍不迁移旧版部署；通用安装器仍处候选验收，不把维护者设备或有限模拟器结果当成所有设备都已完成收口。依据：[入口权限](app/AndroidManifest.xml)、[任务传输](app/src/com/dsb/assistant/DshClient.java)、[私有监听](bridge/private-listener.mjs)及[控制面说明](docs/THREAT-MODEL.md#4-控制权--本地控制面鉴权)。
+App 命令入口要求 `INJECT_EVENTS` 系统权限；任务通道使用 Termux `RUN_COMMAND` 与私有套接字。维护者设备于 2026-10-23 迁移到与安装器相同的私有传输布局，并通过含一次重启的验收：重启后只起一个受管 server，自动重新核验并绑定，doctor、后台虚拟屏与真实任务均通过；软件包升级已在 arm64 模拟器上验收（真实 `pkg upgrade` 后原版 adb 无法加载，私有 ADB 与 doctor 正常），维护者真机上的软件包升级验收尚未做；在途任务仍有单独验收边界。仓库安装器从首次配对起使用私有 bootstrap，并默认尝试收紧 ADB；预检跳过或回滚后的普通 TCP 是较弱回退，不能忽略「ADB 未加固」警告。公开工具仍不迁移旧版部署；通用安装器仍处候选验收，不把维护者设备或有限模拟器结果当成所有设备都已完成收口。依据：[入口权限](app/AndroidManifest.xml#L99)、[任务传输](app/src/com/dsb/assistant/DshClient.java)、[私有监听](bridge/private-listener.mjs)及[控制面说明](docs/THREAT-MODEL.zh-CN.md#4-控制权--本地控制面鉴权)。
 
 ## 已知限制
 

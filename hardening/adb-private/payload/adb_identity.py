@@ -10,7 +10,7 @@ import time
 import signal
 from contextlib import nullcontext, contextmanager
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from adb_client import client_run
+from adb_client import client_run, active_runtime, check_runtime_maps
 import adb_relay
 
 
@@ -28,6 +28,9 @@ def generation(adb):
                             f'servers={len(rows)}, unknown={unknown}, '
                             f'backend_match={[row["exe"] == backend for row in rows]}')
     row = rows[0]
+    config = active_runtime(backend, verify=False)  # maps validation below also verifies every private file.
+    if config is not None:
+        check_runtime_maps(row['pid'], config)
     start = (Path('/proc') / str(row['pid']) / 'stat').read_text().rsplit(')', 1)[1].split()[19]
     return {'pid': row['pid'], 'start': start, 'exe': row['exe'], 'socket': row['socket']}
 
@@ -170,7 +173,8 @@ def launch_relay(target, record, script):
     state = directory / (secrets.token_hex(16) + '.json')
     child = subprocess.Popen([str(Path(os.environ['PREFIX']) / 'bin/python3'), '-I', str(script), target, str(state)],
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             start_new_session=True, close_fds=True)
+                             start_new_session=True, close_fds=True,
+                             env={k: v for k, v in os.environ.items() if not k.startswith('LD_')})
     try:
         deadline = time.monotonic() + 3
         while not state.exists():
@@ -287,7 +291,8 @@ def challenge_transport(adb, tid, inventory=False):
     nonce = 'dsb-challenge-' + secrets.token_hex(32)
     child = subprocess.Popen([str(prefix / 'bin/bash'), '-c', 'read -r -t 10', 'challenge', nonce],
                              stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, close_fds=True)
+                             stderr=subprocess.DEVNULL, close_fds=True,
+                             env={k: v for k, v in os.environ.items() if not k.startswith('LD_')})
     try:
         deadline = time.monotonic() + 2
         while True:

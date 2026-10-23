@@ -1,44 +1,40 @@
-# 路线图 / Roadmap
+# Roadmap
 
-> 这里的东西都是**计划中、未实现**。已经能用的看 README「现在能做什么」。
+**English** · [简体中文](ROADMAP.zh-CN.md)
 
-## 愿景
+> Everything here is **planned, not implemented**. For what already works, see "What it can do today" in the README.
 
-构建在 DSH 之上（默认 DeepSeek 模型）的手机 AI 助手——不换手机、不 root，而且**可信**优先于聪明。逗沙包自己的价值在执行侧：虚拟屏、执行闸门、任务账本与审计。
+## Vision
 
-## 里程碑
+A phone AI assistant built on DSH (DeepSeek model by default) that needs no new phone and no root, and puts being **trustworthy** ahead of being clever. DSB's own value is on the execution side: the virtual display, execution gates, task ledger and audit.
 
-| 阶段 | 内容 | 可信方面的要求 |
+## Milestones
+
+| Stage | Scope | Trust requirements |
 |---|---|---|
-| **M0 发布** | 方案 B：保留 Termux，做一键安装器；把全合一 APK 需要的打包管线（rootfs 裁剪、版本清单、下载通道）顺手建起来 | 发布前完成本地控制面鉴权（R6）与密钥/隐私扫描 |
-| **M1 语音入口** | 本机唤醒词 + 流式 ASR + TTS（现有系统 TTS 朗读结论卡可复用） | 唤醒词在本机识别，**不上传录音**；录音时有明显提示；可一键关闭 |
-| **M2 可信三件套** | 执行报告（每次任务可读的「做了什么、拒了什么」）；无障碍自愈（被系统关掉后提示并引导恢复，**不代点授权**）；敏感输入 `type_secret`（口令类输入不经模型、不落盘） | |
-| **M3 全合一 APK（方案 A）** | node/proot 随 APK 分发、rootfs 首启下载、版本目录 + 指针切换升级。触发条件（满足两条才做）：安装门槛成为高频 issue；执行层稳定；愿意认领长期维护 | 已知风险：可执行文件分发方式非官方保证；Android 15+ 的 16KB 页对齐；proot 为 GPL 须附源码声明 |
-| **M4 去 rootfs** | 技能逐步标准化到 dsh/Node 原生能力，容器越裁越小 | |
-| **进行中的安全项** | 把最终授权挪到大脑改不了的边界（例如 App 侧），使「大脑被攻破」也点不了付款 | 见威胁模型「明确不防的」第一条 |
+| **M0 Release** | Plan B: keep Termux and ship a one-click installer; build the packaging pipeline the all-in-one APK will need along the way (rootfs trimming, version manifest, download channel) | Finish local control-plane authentication (R6) and secret/privacy scanning before release |
+| **M1 Voice entry** | On-device wake word + streaming ASR + TTS (the existing system TTS that reads conclusion cards can be reused) | The wake word is recognized on the device and **no audio is uploaded**; recording is clearly indicated; one tap turns it off |
+| **M2 Trust trio** | Execution report (a readable "what it did, what it refused" for every task); accessibility self-healing (when the system turns the service off, prompt and guide recovery, **without clicking grants on your behalf**); sensitive input `type_secret` (password-like input never goes through the model and is never written to disk) | |
+| **M3 All-in-one APK (plan A)** | Ship node/proot inside the APK, download the rootfs on first launch, upgrade through versioned directories plus a pointer switch. Triggers (do it only when two hold): installation friction becomes a frequent issue; the execution layer is stable; someone is willing to own long-term maintenance | Known risks: shipping executables this way is not officially guaranteed; 16 KB page alignment on Android 15+; proot is GPL and needs a source notice |
+| **M4 Drop the rootfs** | Gradually move skills onto native dsh/Node capabilities so the container keeps shrinking | |
+| **Security work in progress** | Move final authorization to a boundary the brain cannot change (for example the App side), so a compromised brain still cannot tap "pay" | See the first item of "Explicitly not defended" in the threat model |
 
-## 可信加固（兑现更强承诺）
+## Trust hardening (delivering stronger promises)
 
-以下均为**计划中、未实现**，不是当前版本的隐私或安全保证。当前行为与代码依据见[威胁模型的数据流说明](THREAT-MODEL.md#2-隐私--按路径说明外发与本机留存)和[架构](ARCHITECTURE.md#数据流与留存)。
+Everything below is **planned, not implemented**, and is not a privacy or security guarantee of the current version. For current behaviour and the code behind it, see the [threat model's data-flow section](THREAT-MODEL.md#2-privacy-what-leaves-the-phone-and-what-stays) and the [architecture](ARCHITECTURE.md#data-flow-and-retention).
 
-- [ ] **整屏问答改为裁剪图优先，或允许关闭整屏上传**：覆盖「问 DSH」及模型调用路径，不能只改闸门裁剪逻辑；当前整屏路径见 [`bridge/bridge.mjs`](../bridge/bridge.mjs#L523)。
-- [ ] **视觉服务异常时，空树页点击改为拒绝**：去掉 OCR 未检出危险词时的回退放行，当前分支见 [`agent/safe_tap.py`](../agent/safe_tap.py#L1514)。
-- [ ] **审计自由文本字段脱敏**：覆盖 `note` / `expect` / 视觉解释等字段，再验证聊天、订单等敏感原文不会被带入；当前直接序列化写入见 [`audit()`](../agent/safe_tap.py#L349)。
+- [ ] **Make full-screen questions crop-first, or allow turning off full-frame uploads**: this must cover "Ask DSH" and the model-call paths, not just the gate's cropping logic; the current full-frame path is in [`bridge/bridge.mjs`](../bridge/bridge.mjs#L548).
+- [ ] **Refuse empty-tree taps when the vision service fails**: remove the fallback that approves when OCR found no danger words; the current branch is in [`agent/safe_tap.py`](../agent/safe_tap.py#L1516).
+- [ ] **Redact free-text audit fields**: cover `note` / `expect` / vision explanations and similar fields, then verify that chat, order and other sensitive text is not carried in; records are currently serialized directly by [`audit()`](../agent/safe_tap.py#L369).
 
-## 其它想做的
+## Other ideas
 
-- 桌面小组件：一键下任务、看任务状态与最近的拒绝记录
-- **模型可替换**：大脑通过 DSH 中可用的 provider/model 接入，并完成端到端验收；若更换独立的闸门视觉模型，还须重新验收视觉复核与定位能力（闸门安全依赖视觉判断质量）。现有 `BRIDGE_BRAIN=api` 只让 `/step`、`/ask` 直连模型、绕过这两条路径的 DSH，不替代 `/do` 的 DSH 运行时
-- 熟路模式：复用上次走通的路径减少大脑步数（现在每个任务 60–80% 时间在等模型）
+- Home-screen widget: submit a task with one tap, see task status and recent refusals
+- **Pluggable models**: connect the brain through the providers/models available in DSH and pass end-to-end acceptance; switching the separate gate vision model also requires re-accepting visual recheck and localization (gate safety depends on the quality of visual judgement). The existing `BRIDGE_BRAIN=api` only lets `/step` and `/ask` call the model directly, bypassing DSH on those two paths; it does not replace the DSH runtime for `/do`
+- Familiar-route mode: reuse a path that worked last time to cut brain steps (today 60–80% of each task's time is spent waiting for the model)
 
-## 明确不做
+## Explicitly not planned
 
-- Play 商店分发（可执行文件限制 + 审核风险；GitHub Release 直发）
-- 「取代手机」：手机只是 AI 的执行器官
-- 枚举式守卫：靠关键词清单「修」安全问题
-
----
-
-*English:* M0 release (Termux-based one-click installer, build the packaging pipeline for the all-in-one APK); M1 voice (on-device wake word, no audio upload); M2 trust trio (execution report, accessibility self-heal without auto-granting, `type_secret`); M3 all-in-one APK when triggers are met; M4 shrink the rootfs. Ongoing: move final authorization out of the brain's reach. Not planned: Play Store, "replacing the phone", keyword-list guards.
-
-*Trust hardening (planned, not implemented):* make full-screen questions crop-first or allow disabling full-frame uploads; refuse empty-tree taps when the vision service fails instead of falling back to OCR-only approval; redact audit free-text fields. These are future commitments, not current guarantees.
+- Play Store distribution (executable restrictions + review risk; releases ship directly on GitHub)
+- "Replacing the phone": the phone is only the AI's execution organ
+- Enumeration guards: "fixing" safety problems with keyword lists

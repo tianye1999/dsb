@@ -14,6 +14,13 @@ import adb_client
 
 
 class ParentDeathSetupTests(unittest.TestCase):
+    def test_backend_loader_overrides_are_removed_without_mutating_the_caller(self):
+        env = {'LD_PRELOAD': '/untrusted.so', 'LD_LIBRARY_PATH': '/other', 'LD_AUDIT': '/audit', 'ADB_EMU': '0'}
+        with patch.object(adb_client.subprocess, 'run') as run:
+            adb_client.client_run(['/native/adb', 'version'], env=env)
+        self.assertEqual(run.call_args.kwargs['env'], {'ADB_EMU': '0'})
+        self.assertIn('LD_PRELOAD', env)
+
     def test_death_signal_is_armed_before_parent_check_and_process_filter(self):
         events = []
         with patch.object(adb_client, '_PRCTL', side_effect=lambda *args: events.append('death-signal') or 0) as prctl, \
