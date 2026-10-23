@@ -24,13 +24,7 @@ curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.2/dsb-installe
 
 首次会更新 Termux 的基础库、安装 Ubuntu 24.04、Node/dsh、Python/OCR、scrcpy，下载量较大。网络需可访问 Termux、GitHub、Ubuntu、nodejs.org、npm、PyPI。`Ctrl-C` 可以中断；重跑 `bash ~/dsb-installer/install.sh` 继续，不删除容器、会话或 Key，也不重复添加 SSH 授权。
 
-> **已知问题（Termux proot 5.1.107.99，2026-10-23 发布）**：用这个版本的 proot，在容器里安装 Ubuntu 软件包时可能中途报 `proot warning: signal 11 received from process -1` 而停止（已在 arm64 模拟器上复现；5.1.107.98 正常）。安装器会如实报错，不会显示成功。Termux 修复之前，请先装回上一版本并 hold，再运行上面的命令或重跑安装器：
->
-> ```bash
-> pkg install proot=5.1.107.98 && apt-mark hold proot
-> ```
->
-> 修复版发布后用 `apt-mark unhold proot` 解除（上游：[termux/proot#420](https://github.com/termux/proot/issues/420)）。如果 5.1.107.98 已无法安装，请查看逗沙包的发布说明是否有更新。
+> **已解决**：Termux proot 5.1.107.99（2026-10-23）在容器里安装 Ubuntu 软件包时可能报 `proot warning: signal 11 received from process -1` 而停止。proot 5.1.107.100 已修复（[termux/proot#420](https://github.com/termux/proot/issues/420)），我们已在 arm64 模拟器上复测原来崩溃的安装。如果你之前为规避它 hold 了 proot，请运行 `apt-mark unhold proot && pkg upgrade`。
 
 Ubuntu 官方软件源使用 HTTPS；最小镜像缺少 CA 时，先使用 Termux 已受信任的 CA，再由 Ubuntu 的 `ca-certificates` 包接管。不关闭 TLS 或 APT 签名校验，保留原源配置备份和自定义源。
 
