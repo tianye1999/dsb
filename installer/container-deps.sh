@@ -57,6 +57,8 @@ if [ ! -f "$marker" ] || [ "$(readlink /usr/local/bin/dsh)" != /opt/dsb-dsh/node
 fi
 python3 -m venv /root/.dsb-venv
 installed=0
+# The iteration variable only bounds retries; keep installation retry behavior unchanged.
+# shellcheck disable=SC2034
 for attempt in 1 2 3; do
   # 不复用可能被断流污染的 HTTP 缓存；hash 不匹配仍然严格失败。
   if /root/.dsb-venv/bin/pip install --no-cache-dir --retries 5 --require-hashes --only-binary=:all: -r "$DEPS/requirements.txt"; then

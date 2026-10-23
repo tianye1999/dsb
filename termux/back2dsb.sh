@@ -10,7 +10,6 @@
 #
 # 用法：bash ~/dsb/back2dsb.sh
 set -u
-P=/data/data/com.termux/files/usr/bin
 source "$(dirname "${BASH_SOURCE[0]}")/adb-target.sh"
 A=("${DSB_ADB_COMMAND[@]}" "${DSB_ADB_SELECTOR[@]}")
 

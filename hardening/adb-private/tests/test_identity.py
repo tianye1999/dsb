@@ -256,7 +256,7 @@ class BindingTests(unittest.TestCase):
                 proc_stat = proc_root.__truediv__.return_value.__truediv__.return_value
                 proc_stat.read_text.return_value = (
                     str(old['pid']) + ' (fixture relay) ' + ' '.join([process_state] + ['0'] * 18 + [start]))
-                def local_path(*parts):
+                def local_path(*parts, proc_root=proc_root):
                     return proc_root if parts == ('/proc',) else Path(*parts)
                 with patch.object(identity, 'Path', side_effect=local_path), \
                      patch.object(identity.os, 'kill') as kill:

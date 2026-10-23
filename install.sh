@@ -244,6 +244,8 @@ setup_adb() {
   fi
   TARGET=$(python3 "$SOURCE/installer/configure.py" local-endpoint "$TARGET")
   local verified=0 attempt
+  # The iteration variable only bounds retries; preserve transport verification timing.
+  # shellcheck disable=SC2034
   for attempt in 1 2 3; do
     if python3 "$HOME/dsb/adb_identity.py" "$TARGET" >/dev/null; then verified=1; break; fi
     sleep 1

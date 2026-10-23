@@ -52,13 +52,13 @@ def main():
         real_popen = ocr.subprocess.Popen
         for operation in ("cancelled", "timeout"):
             processes = []
-            def recorded_popen(*args, **kwargs):
+            def recorded_popen(*args, processes=processes, **kwargs):
                 process = real_popen(*args, **kwargs)
                 assert os.getpgid(process.pid) == os.getpgrp()
                 processes.append(process)
                 return process
             started = time.monotonic()
-            options = ({"cancel_check": lambda: bool(processes) and time.monotonic() - started > .3}
+            options = ({"cancel_check": lambda processes=processes, started=started: bool(processes) and time.monotonic() - started > .3}
                        if operation == "cancelled" else {"timeout_s": .5})
             with patch.object(ocr.subprocess, "Popen", side_effect=recorded_popen):
                 result = ocr.recognize_result(str(path), engine="rapid", **options)

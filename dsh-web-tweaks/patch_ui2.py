@@ -1,5 +1,4 @@
 
-import os
 from tweak_paths import targets as patch_targets
 targets = patch_targets()
 EXTRA = '''

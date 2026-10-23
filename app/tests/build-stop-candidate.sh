@@ -15,11 +15,11 @@ export JAVA_HOME=${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-arm64}
 export PATH="$JAVA_HOME/bin:$PATH"
 mkdir -p "$OUT/classes" "$OUT/dex" "$OUT/test-classes" "$OUT/test-dex"
 LD_LIBRARY_PATH="$TERMUX_PREFIX/lib" "$TAAPT2" compile --dir "$PROJ/res" -o "$OUT/res.zip"
-javac -encoding UTF-8 -source 11 -target 11 -nowarn -cp "$PLATFORM" -d "$OUT/classes" "$PROJ"/src/com/dsb/assistant/*.java
+javac -encoding UTF-8 --release 11 -Xlint:all -Werror -cp "$PLATFORM" -d "$OUT/classes" "$PROJ"/src/com/dsb/assistant/*.java
 mapfile -t CLASSES < <(find "$OUT/classes" -name '*.class')
 "$BT/d8" --min-api 30 --lib "$PLATFORM" --output "$OUT/dex" "${CLASSES[@]}"
 LD_LIBRARY_PATH="$TERMUX_PREFIX/lib" "$TAAPT2" link -I "$PLATFORM" --manifest "$PROJ/AndroidManifest.xml" -o "$OUT/base.apk" "$OUT/res.zip" --min-sdk-version 30 --target-sdk-version 34 --version-code 1 --version-name 1.0
-javac -encoding UTF-8 -source 11 -target 11 -nowarn -cp "$PLATFORM" -d "$OUT/test-classes" "$PROJ"/tests/device/*.java
+javac -encoding UTF-8 --release 11 -Xlint:all -Werror -cp "$PLATFORM" -d "$OUT/test-classes" "$PROJ"/tests/device/*.java
 mapfile -t TEST_CLASSES < <(find "$OUT/test-classes" -name '*.class')
 "$BT/d8" --min-api 30 --lib "$PLATFORM" --output "$OUT/test-dex" "${TEST_CLASSES[@]}"
 LD_LIBRARY_PATH="$TERMUX_PREFIX/lib" "$TAAPT2" link -I "$PLATFORM" --manifest "$PROJ/tests/device/AndroidManifest.xml" -o "$OUT/test-base.apk"

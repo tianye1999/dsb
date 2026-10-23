@@ -26,7 +26,7 @@ try {
   const file = path.join(dir, 'PostReleaseHardeningTest.java');
   fs.writeFileSync(file, fixture);
   for (const [cmd, args] of [
-    ['javac', ['-encoding', 'UTF-8', '-d', dir, file]],
+    ['javac', ['--release', '11', '-Xlint:all', '-Werror', '-encoding', 'UTF-8', '-d', dir, file]],
     ['java', ['-cp', dir, 'PostReleaseHardeningTest', ...process.argv.slice(2)]],
   ]) {
     const result = spawnSync(cmd, args, { encoding: 'utf8', timeout: 15000 });

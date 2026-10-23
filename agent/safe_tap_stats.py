@@ -251,7 +251,6 @@ def _main():
     for title, key in (("按 Activity", "by_activity"), ("按解析路径", "by_resolved_by")):
         print("【%s】" % title)
         for k, v in sorted(out[key].items(), key=lambda x: -(x[1][0] + x[1][1])):
-            tot = v[0] + v[1]
             print("   %-46s True %2d False %2d" % (k[:46], v[0], v[1]))
     if a.by_g2 or out["g2"]["closed"]:
         print()

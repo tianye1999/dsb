@@ -234,6 +234,8 @@ public final class StopInstrumentation extends Instrumentation {
                 throw new AssertionError("orange bubble overlaps tap target; move surface or bubble");
         } catch (Throwable t) { throw new AssertionError("cannot establish unobstructed test target", t); }
     }
+    // Match production's balanced node recycling on API 30-32 (no-op on API 33+).
+    @SuppressWarnings("deprecation")
     private void focusField(final android.view.View f, final String name) throws Exception {
         diagnostics.put("focusAttempt", name);
         JSONArray attempts = diagnostics.optJSONArray("focusAttempts");
@@ -281,6 +283,8 @@ public final class StopInstrumentation extends Instrumentation {
             throw t;
         } finally { attempt.put("elapsedMs", android.os.SystemClock.elapsedRealtime() - started); }
     }
+    // Nodes created by this fixture must also be recycled on API 30-32.
+    @SuppressWarnings("deprecation")
     private boolean ownFocusState(android.view.View f, JSONObject attempt, boolean requireViewFocus) throws Exception {
         final boolean[] ready = new boolean[1];
         final Throwable[] error = new Throwable[1];

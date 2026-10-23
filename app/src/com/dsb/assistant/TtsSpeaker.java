@@ -142,6 +142,8 @@ public final class TtsSpeaker {
                         try { cb.run(); } catch (Throwable t) { Log.w(TAG, "onDone 回调异常：" + t.getClass().getSimpleName()); }
                     }
                 }
+                // This abstract callback is still required by UtteranceProgressListener.
+                @SuppressWarnings("deprecation")
                 @Override public void onError(String id) {
                     Log.w(TAG, "❌ 朗读出错 " + id);
                     writeStatus("error", id, 0, null, "引擎回调 onError");
@@ -207,6 +209,8 @@ public final class TtsSpeaker {
      * 2026-09-23 加：用户要求"朗读结束后把界面带回逗沙包，如果我在其他 App"。
      * 只在 onDone 触发；onError 不触发（失败时不该抢屏）。
      */
+    // The deprecated overload is confined to the existing API <21 engine fallback.
+    @SuppressWarnings("deprecation")
     public void speak(String text, Runnable onDone) {
         doneCallback = onDone;
         if (text == null) return;

@@ -2,7 +2,6 @@ import contextlib
 import copy
 import io
 import json
-from pathlib import Path
 import tempfile
 import types
 import unittest

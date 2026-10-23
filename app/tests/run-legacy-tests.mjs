@@ -15,7 +15,7 @@ const fixture = fs.readFileSync(path.join(tests, 'LegacyEntryTest.java'), 'utf8'
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsb-legacy-entry-'));
 try {
   fs.writeFileSync(path.join(dir, 'LegacyEntryTest.java'), fixture);
-  for (const [cmd, args] of [['javac', ['-encoding', 'UTF-8', '-d', dir, path.join(dir, 'LegacyEntryTest.java')]],
+  for (const [cmd, args] of [['javac', ['--release', '11', '-Xlint:all', '-Werror', '-encoding', 'UTF-8', '-d', dir, path.join(dir, 'LegacyEntryTest.java')]],
       ['java', ['-cp', dir, 'LegacyEntryTest']]]) {
     const r = spawnSync(cmd, args, { stdio: 'inherit', timeout: 45000 });
     if (r.error) console.error(r.error);

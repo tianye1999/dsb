@@ -309,6 +309,8 @@ public class AgentAccessibilityService extends AccessibilityService {
         return receipt;
     }
 
+    // API 30-32 still pool nodes; keep the copied target and balanced recycling.
+    @SuppressWarnings("deprecation")
     public ActionReceipt typeWithReceipt(String text) {
         ActionReceipt receipt = new ActionReceipt();
         AccessibilityNodeInfo root = null;

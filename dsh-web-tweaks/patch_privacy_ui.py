@@ -82,7 +82,7 @@ def patch(source):
                                 ('script', 'dsh-privacy-ui-script', SCRIPT)):
         pattern = r'<' + kind + r' id="' + marker + r'">.*?</' + kind + '>'
         if re.search(pattern, source, re.S):
-            source = re.sub(pattern, lambda _: block, source, flags=re.S)
+            source = re.sub(pattern, lambda _, block=block: block, source, flags=re.S)
         else:
             anchor = '</head>' if kind == 'style' else '</body>'
             if anchor not in source:

@@ -13,6 +13,27 @@
 
 离线测试在 CI 里跑；真机验证没法在 CI 跑，所以见下一节。
 
+新增的主要功能必须同时在自动化测试套件中加入相应测试。
+New major functionality must include corresponding tests in the automated test suite.
+
+## 本地静态检查 / Local lint
+
+在隔离的 Python 3.11+ 环境中安装开发依赖（不改变用户安装依赖），并准备 Node 22、JDK 17、Android API 35 和 ShellCheck：
+
+```bash
+python3 -m venv /tmp/dsb-lint-venv
+source /tmp/dsb-lint-venv/bin/activate
+python3 -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+bash scripts/lint.sh
+bash app/tests/lint-java.sh
+```
+
+`scripts/lint.sh` 检查所有 Git 跟踪的 Python、`.sh`、`.js` 和 `.mjs` 文件及 App manifest；新文件需先纳入 Git。Ruff 固定为 0.17.2，wheel 哈希来自 PyPI 对应版本的 JSON 元数据；仅启用 `F`、`E9`、`B006/B012/B016/B018/B023/B025/B033` 缺陷规则，不做格式改写。ShellCheck 按 Bash 解析全部 `.sh`（包括 Termux shebang），`warning` 及以上失败；CI 使用 `ubuntu-latest` 预装版本并输出版本号，本地基线为 0.10.0，不额外下载 CI 二进制或引入 Action。
+
+Java 的全部 App／instrumentation 源码、离线 Java 测试和发布构建均使用 `--release 11 -Xlint:all -Werror`。`--release 11` 保持 Java 11 字节码目标，同时避免 `-source/-target` 未设置系统模块路径的工具链警告；没有全局排除 lint 类别。发布构建也严格失败，因为其 JDK 17／API 35 工具链已明确；确需保留的 Android 兼容 API 只在具体方法用带理由的 `@SuppressWarnings("deprecation")` 标注，不更改运行逻辑。设置 `ANDROID_HOME`（或 `ANDROID_SDK_ROOT`）可指定 SDK；macOS 默认使用 `~/Library/Android/sdk`。这些检查不会运行手机、模拟器或浏览器。
+
+Local lint uses the hash-locked development requirements, Ruff defect checks, Bash-mode ShellCheck (warning or higher), Node syntax checks and strict Java compilation. No device access is needed; retained compatibility APIs and intentional lint exceptions require a local explanation.
+
 ## 真机门（Real-device gate）
 
 凡是改到这些路径的 PR，合并前必须有**真机**证据（审计日志片段 / `safe_tap.py doctor` 输出 / 端到端计时），写在 PR 描述里：

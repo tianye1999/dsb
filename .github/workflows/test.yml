@@ -46,6 +46,12 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
+      - name: use runner JDK 17 for strict Java compilation
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
+      - name: compile all App and instrumentation sources (warnings are errors)
+        run: bash app/tests/lint-java.sh
       - working-directory: bridge
         run: node --test test-*.mjs
       - name: public App lockdown checks (A6)
@@ -74,13 +80,19 @@ jobs:
           DSH_TEST_MODULES="$GITHUB_WORKSPACE/installer/dsh/node_modules" node --test dsh-web-tweaks/recap/route-security.test.mjs
 
   shell-and-manifest:
-    name: shell syntax + Android manifest
+    name: Python + ShellCheck + JS syntax + Android manifest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
       - run: |
-          set -euo pipefail
-          while IFS= read -r -d '' f; do bash -n "$f"; done < <(git ls-files -z -- '*.sh')
-          python3 -c "import xml.dom.minidom as m; m.parse('app/AndroidManifest.xml')"
+          pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+      # ShellCheck comes from ubuntu-latest; lint.sh prints its version in every run.
+      - run: bash scripts/lint.sh

@@ -21,7 +21,6 @@
 #   bash ~/dsb/adbq.sh 蓝            # 只回蓝
 #   bash ~/dsb/adbq.sh 状态          # 看球状态
 set -u
-P=/data/data/com.termux/files/usr/bin
 source "$(dirname "${BASH_SOURCE[0]}")/adb-target.sh"
 ADB=("${DSB_ADB_COMMAND[@]}" "${DSB_ADB_SELECTOR[@]}")
 
@@ -40,6 +39,8 @@ case "${1:-}" in
     #    经常要 5~10 秒，于是"其实已经切过去了"却被判失败（自动切回守护的日志里 rc=1）。
     #    改成轮询最多 ~15 秒，切过去就立刻返回。
     FG=""
+    # The iteration variable only bounds retries; preserve foreground recovery timing.
+    # shellcheck disable=SC2034
     for i in 1 2 3 4 5 6 7 8 9 10; do
       sleep 1.5
       FG=$("${ADB[@]}" shell "dumpsys window 2>/dev/null | grep -m1 -oE 'mCurrentFocus=Window\{[^}]*\}'" 2>/dev/null | tr -d '\r')

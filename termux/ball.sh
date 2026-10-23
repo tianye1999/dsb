@@ -13,7 +13,6 @@
 #   bash ~/dsb/ball.sh 蓝     # 操作结束
 #   bash ~/dsb/ball.sh 状态   # 读日志里最后一次球状态
 set -u
-P=/data/data/com.termux/files/usr/bin
 source "$(dirname "${BASH_SOURCE[0]}")/adb-target.sh"
 CMD="${1:-}"
 case "$CMD" in

@@ -28,7 +28,7 @@ const fixture = fs.readFileSync(path.join(root, 'tests/StopLifecycleTest.java'),
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsb-stop-'));
 try {
   fs.writeFileSync(path.join(dir, 'StopLifecycleTest.java'), fixture);
-  for (const [cmd, args] of [['javac', ['-encoding', 'UTF-8', '-d', dir, path.join(root, 'src/com/dsb/assistant/ActionReceipt.java'), path.join(root, 'tests/ActionReceiptTest.java'), path.join(dir, 'StopLifecycleTest.java')]],
+  for (const [cmd, args] of [['javac', ['--release', '11', '-Xlint:all', '-Werror', '-encoding', 'UTF-8', '-d', dir, path.join(root, 'src/com/dsb/assistant/ActionReceipt.java'), path.join(root, 'tests/ActionReceiptTest.java'), path.join(dir, 'StopLifecycleTest.java')]],
       ['java', ['-cp', dir, 'ActionReceiptTest']], ['java', ['-cp', dir, 'StopLifecycleTest']]]) {
     const r = spawnSync(cmd, args, { stdio: 'inherit', timeout: 45000 });
     if (r.status !== 0) process.exitCode = r.status || 1;

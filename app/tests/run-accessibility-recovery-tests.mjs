@@ -45,7 +45,7 @@ const files={
 };
 try{
   for(const [name,code] of Object.entries(files)){const f=dir+'/'+name;fs.mkdirSync(path.dirname(f),{recursive:true});fs.writeFileSync(f,code);}
-  for(const [cmd,args] of [['javac',['-encoding','UTF-8','-d',dir,...Object.keys(files).map(f=>dir+'/'+f)]],['java',['-cp',dir,'com.dsb.assistant.RecoveryTest']]]){
+  for(const [cmd,args] of [['javac',['--release','11','-Xlint:all','-Werror','-encoding','UTF-8','-d',dir,...Object.keys(files).map(f=>dir+'/'+f)]],['java',['-cp',dir,'com.dsb.assistant.RecoveryTest']]]){
     const r=spawnSync(cmd,args,{encoding:'utf8',timeout:30000});assert.equal(r.status,0,r.stdout+r.stderr);process.stdout.write(r.stdout);
   }
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

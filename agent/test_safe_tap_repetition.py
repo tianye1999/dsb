@@ -98,7 +98,7 @@ class Repetition(unittest.TestCase):
     def test_attempt_is_on_disk_before_dispatch(self):
         for kind, key, points in (("tap", "taps", [(600, 900)]), ("key", "keys", [4])):
             self.reset()
-            def dispatch(*args, **kwargs):
+            def dispatch(*args, key=key, **kwargs):
                 state = st.load_state()
                 self.assertEqual(len(state[key]), 1)
                 self.assertIn("consumed_at", state["last_shot"])
@@ -146,7 +146,7 @@ class Repetition(unittest.TestCase):
             for kind, points in (("tap", [(600, 900)]), ("key", [4])):
                 with self.subTest(value=value, kind=kind):
                     self.reset()
-                    with patch.object(st, "cfg_get", side_effect=lambda k, d=None: value if k.startswith("breaker.") else d):
+                    with patch.object(st, "cfg_get", side_effect=lambda k, d=None, value=value: value if k.startswith("breaker.") else d):
                         self.assertEqual(self.action(kind, points), 2)
                     self.assertEqual(self.calls, [])
 

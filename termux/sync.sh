@@ -4,7 +4,6 @@ set -u
 SRC=/data/data/com.termux/files/home/dsb
 DST=/root/termux-dsb
 # 只同步脚本类文件，跳过日志/备份/状态
-PAT='*.sh *.py'
 MODE="${1:---both}"
 
 in_one() {   # Termux -> 副本

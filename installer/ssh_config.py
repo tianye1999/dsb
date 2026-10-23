@@ -1,5 +1,4 @@
 """私密备份原配置；生成受控配置而不是追加无效的后置选项。"""
-import os
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))

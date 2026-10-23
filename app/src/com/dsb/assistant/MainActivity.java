@@ -89,6 +89,8 @@ public class MainActivity extends Activity {
 
     private int dp(float v) { return (int) (v * getResources().getDisplayMetrics().density); }
 
+    // Keep WebSQL enabled for older WebView engines; newer engines ignore this setting.
+    @SuppressWarnings("deprecation")
     @Override protected void onCreate(Bundle s) {
         super.onCreate(s);
 
@@ -463,6 +465,8 @@ public class MainActivity extends Activity {
         super.onActivityResult(req, res, data);
     }
 
+    // Preserve the existing back-to-WebView/hide contract on pre-API-33 devices.
+    @SuppressWarnings("deprecation")
     @Override public void onBackPressed() {
         if (web != null && web.canGoBack()) web.goBack();
         else moveTaskToBack(true);      // 返回 = 收起成小球，而不是退出

@@ -1,6 +1,5 @@
 import contextlib
 import io
-import json
 import sys
 import types
 import unittest
@@ -18,7 +17,7 @@ class RunnerRecovery(unittest.TestCase):
     def test_failed_and_refused_recovery_cannot_continue_or_claim_goal(self):
         for code, status in ((2, "refused"), (3, "failed"), (130, "cancelled")):
             with self.subTest(code=code), patch.dict(sys.modules, {"recovery": recovery}), \
-                    patch.object(recovery, "recover", new=lambda *a: {"rc": code, "reason": "synthetic"}):
+                    patch.object(recovery, "recover", new=lambda *a, code=code: {"rc": code, "reason": "synthetic"}):
                 self.records.clear()
                 rc, result = self.run_script("try:\n    recover('app_dead')\nexcept Exception:\n    pass\nset_goal(True, 'must not override')")
                 self.assertEqual(rc, code)

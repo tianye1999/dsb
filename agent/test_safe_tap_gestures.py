@@ -141,14 +141,14 @@ class Gestures(unittest.TestCase):
         for value in (0, -1, 65, True, 2.0, "16", None, {}, []):
             for kind in self.kinds:
                 self.reset()
-                with patch.object(st, "cfg_get", side_effect=lambda k, d=None: value if k == "breaker.gesture_limit" else d):
+                with patch.object(st, "cfg_get", side_effect=lambda k, d=None, value=value: value if k == "breaker.gesture_limit" else d):
                     self.assertEqual(self.action(kind, self.points), 2, (value, kind))
                 self.assertEqual(self.calls, [])
 
     def test_config_boundary_values(self):
         for limit in (1, 64):
             self.reset()
-            with patch.object(st, "cfg_get", side_effect=lambda k, d=None: limit if k == "breaker.gesture_limit" else d):
+            with patch.object(st, "cfg_get", side_effect=lambda k, d=None, limit=limit: limit if k == "breaker.gesture_limit" else d):
                 self.spend(limit)
                 self.look()
                 self.assertEqual(self.action("scroll", self.points), 2)

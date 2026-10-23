@@ -1,5 +1,4 @@
 
-import os
 from tweak_paths import targets
 t = targets()[0]
 s = open(t, encoding='utf-8').read()

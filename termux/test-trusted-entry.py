@@ -165,7 +165,7 @@ class Transport(unittest.TestCase):
             with self.subTest(mode=mode):
                 spool = SpoolBroadcast(data)
 
-                def broadcast(meta, op, end, **extras):
+                def broadcast(meta, op, end, mode=mode, spool=spool, **extras):
                     if op == 'READ' and extras['offset'] == len(data):
                         if mode == 'rejected':
                             raise ValueError('protected_receiver_rejected')

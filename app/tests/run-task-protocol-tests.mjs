@@ -15,7 +15,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsb-task-protocol-'));
 try {
   const file = path.join(dir, 'TaskProtocolTest.java');
   fs.writeFileSync(file, fixture);
-  for (const [cmd, args] of [['javac', ['-encoding', 'UTF-8', '-d', dir, file]],
+  for (const [cmd, args] of [['javac', ['--release', '11', '-Xlint:all', '-Werror', '-encoding', 'UTF-8', '-d', dir, file]],
     ['java', ['-cp', dir, 'TaskProtocolTest']]]) {
     const result = spawnSync(cmd, args, { stdio: 'inherit', timeout: 30000 });
     if (result.status !== 0) { process.exitCode = result.status || 1; break; }

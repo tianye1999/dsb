@@ -1,4 +1,3 @@
-import fcntl
 import hashlib
 import importlib.util
 import os

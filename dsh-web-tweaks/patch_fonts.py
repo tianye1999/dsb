@@ -18,7 +18,6 @@
 #   子调用      : .ztWv_q_subCalls{margin:4px 0 2px 22px; row-gap:4px}
 #   消息行      : .EvIC1a_flowItem{margin-top:16px}
 #   表格        : th/td padding:10px + line-height:1.4 → 行高 42~64px
-import os
 
 from tweak_paths import targets
 TARGETS = targets()
