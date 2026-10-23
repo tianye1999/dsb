@@ -28,7 +28,12 @@ def adb_command(binary='adb'):
             if data.get('version') != 2 or not isinstance(tid, int) or tid <= 0:
                 raise EndpointUnavailable('transport 凭据无效')
             # 普通模式也不能仅凭一个旧整数 ID 派发。原生 helper 再检查代次并禁止暗中自启。
-            if not (TERMUX_PREFIX / 'var/lib/dsb-adb').exists():
+            root = TERMUX_PREFIX / 'var/lib/dsb-adb'
+            terminal = False
+            journal = root / 'journal.json'
+            if journal.is_file() and not journal.is_symlink():
+                terminal = json.loads(journal.read_text()).get('state') == 'rolled-back'
+            if not root.exists() or terminal:
                 return [str(TERMUX_PREFIX / 'bin/python3'), '-I',
                         str(TERMUX_HOME / 'dsb/adb_identity.py'), '--execute', '-t', str(tid)]
         except (OSError, ValueError) as exc:
@@ -59,18 +64,26 @@ def transport_check():
     import subprocess
     root = TERMUX_PREFIX / 'var/lib/dsb-adb'
     state = TERMUX_PREFIX / 'var/lib/dsb-adb-install.json'
-    native_env = dict(os.environ, PREFIX=str(TERMUX_PREFIX), HOME=str(TERMUX_HOME))
+    native_env = {key: value for key, value in os.environ.items() if not key.startswith('LD_')}
+    native_env.update(PREFIX=str(TERMUX_PREFIX), HOME=str(TERMUX_HOME))
     try:
-        if root.exists() or root.is_symlink():
+        journal = root / 'journal.json'
+        rolled_back = False
+        if journal.is_file() and not journal.is_symlink():
+            rolled_back = json.loads(journal.read_text()).get('state') == 'rolled-back'
+        if (root.exists() or root.is_symlink()) and not rolled_back:
             result = subprocess.run([str(TERMUX_PREFIX / 'bin/python3'), '-I',
-                                     str(root / 'adb_policy.py'), '--policy-check'],
+                                     str(root / 'adb_policy.py'), '--policy-check-fast'],
+                                    # Native doctor/guard publishes the full-audit receipt; proot only checks metadata.
                                     capture_output=True, text=True, timeout=12, env=native_env)
             report = json.loads(result.stdout)
             if result.returncode != 0 or report.get('ok') is not True:
                 return 'fail', '私有 ADB 检查失败：' + str(report.get('error', 'unknown'))
             return 'ok', '私有 socket、关键入口、进程及 TCP 检查通过'
-        if state.exists():
-            report = json.loads(state.read_text())
+        if state.exists() or rolled_back:
+            report = json.loads(state.read_text()) if state.exists() else {'status': 'rolled-back'}
+            if rolled_back:
+                report = {'status': 'rolled-back', 'reason': '普通回滚已完成，等待归档私有目录'}
             if report.get('status') in ['skipped', 'rolled-back']:
                 owner = subprocess.run([str(TERMUX_PREFIX / 'bin/python3'), '-I',
                                         str(TERMUX_HOME / 'dsb/adb-tcp-owner.py'), '--check'],

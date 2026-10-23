@@ -1,74 +1,77 @@
-# 架构 / Architecture
+# Architecture
 
-## 三层部署
+**English** · [简体中文](ARCHITECTURE.zh-CN.md)
 
-| 层 | 跑在哪 | 目录 | 作用 |
+## Three deployment layers
+
+| Layer | Runs on | Directory | Role |
 |---|---|---|---|
-| **App**（`com.dsb.assistant`，显示名「逗沙包」） | Android | `app/` | 眼和手：无障碍服务（读控件树、派发手势/输入）、悬浮球（橙/蓝）、WebView 里显示 dsh 网页、通知监听、命令入口 `CmdReceiver` |
-| **Termux 宿主** | Termux App | `termux/` | sshd、adb 自连、看门狗（`supervisor.sh`）、开机链（`boot.sh`/`shutdown.sh`）、球红绿灯（`adbq.sh`/`ball.sh`）、屏幕常亮守护 |
-| **容器** | Termux 里的 proot Ubuntu | `agent/` `bridge/` `dsh-config/` `dsh-web-tweaks/` | 大脑（dsh + DeepSeek）、任务桥接、执行层原语、OCR/视觉 |
+| **App** (`com.dsb.assistant`, shown as "逗沙包") | Android | `app/` | Eyes and hands: accessibility service (reads the view tree, dispatches gestures and input), floating ball (orange/blue), the dsh web UI in a WebView, notification listener, command entry `CmdReceiver` |
+| **Termux host** | Termux app | `termux/` | sshd, adb self-connection, watchdog (`supervisor.sh`), boot chain (`boot.sh`/`shutdown.sh`), ball status light (`adbq.sh`/`ball.sh`), keep-screen-on daemon |
+| **Container** | proot Ubuntu inside Termux | `agent/` `bridge/` `dsh-config/` `dsh-web-tweaks/` | Brain (dsh + DeepSeek), task bridge, execution primitives, OCR/vision |
 
-## 一个任务的生命周期
+## Life of a task
 
-1. 你在 App 网页里下任务 → App 带 `task_id`（UUID）调桥接 `/do`。
-2. **桥接**（`bridge/bridge.mjs` + `task-ledger.mjs`）：账本检查 `task_id` 幂等、当前无执行中任务、运行时状态已知 → 把原话交给 dsh 运行时（`phone` 配置，挂着危险动作钩子 `agent/check_gate.py`）。
-3. **大脑**读 `docs/internal` 里给它的技能说明（发布版见 `agent/SKILL.md`），用 bash 调 `agent/` 里的原语：
-   - `safe_tap.py open --app X --vd`：建 scrcpy 虚拟屏并在上面打开 App
-   - `safe_tap.py look --display N`：拍一帧 + 控件树 + （空树时）OCR → 发一张**凭据**（shot_id）
-   - `act.py tap --target "文字或描述"`：树 → OCR 精确找字 → 没找到且给了区域才视觉定位
-   - `safe_tap.py tap/swipe/scroll/key/type --shot <id>`：全部先过闸门再派发
-   - `vd_session.py stop`：收屏、删录像
-4. 每个动作：闸门 → （R3 派发前复核）→ 经 App 无障碍派发到指定显示器 → 等回执 → 动作后截图 → 审计。
-5. 大脑写结论卡 → 桥接回 App；账本记 `reply_received`。「停止」走 `/cancel`，只有确认所有子进程退出才记 `cancelled`。
+1. You submit a task in the App's web UI → the App calls the bridge's `/do` with a `task_id` (UUID).
+2. **Bridge** (`bridge/bridge.mjs` + `task-ledger.mjs`): the ledger checks that the `task_id` is idempotent, no task is running and the runtime state is known → it hands your words to the dsh runtime (the `phone` profile, with the dangerous-action hook `agent/check_gate.py` attached).
+3. The **brain** reads the skill notes written for it under `docs/internal` (the release version is `agent/SKILL.md`) and calls the primitives in `agent/` through bash:
+   - `safe_tap.py open --app X --vd`: create a scrcpy virtual display and open the app on it
+   - `safe_tap.py look --display N`: capture a frame + view tree + OCR (when the tree is empty) → issue a **credential** (shot_id)
+   - `act.py tap --target "text or description"`: tree → exact OCR text match → visual localization only if nothing matched and a region was given
+   - `safe_tap.py tap/swipe/scroll/key/type --shot <id>`: every action passes the gates before dispatch
+   - `vd_session.py stop`: close the display and delete the recording
+4. Each action: gates → (R3 pre-dispatch recheck) → dispatched through the App's accessibility service to the chosen display → wait for the receipt → post-action screenshot → audit.
+5. The brain writes a conclusion card → the bridge returns it to the App; the ledger records `reply_received`. "Stop" goes through `/cancel`, and `cancelled` is recorded only after every child process is confirmed to have exited.
 
-## 闸门（`agent/safe_tap.py`）
+## Gates (`agent/safe_tap.py`)
 
-| 闸门 | 管什么 |
+| Gate | What it checks |
 |---|---|
-| G1 | 凭据 90 秒有效；前台 App 不变；虚拟屏凭据绑定 displayId / uniqueId / 尺寸 / 会话 |
-| G2 | 控件树危险词周围禁区（pad 40px） |
-| G2b | 空控件树：调用方确认 + OCR 危险词（整行横带）+ 点按视觉判断；滑动类在危险页整页拒绝；按键只放行导航键和粘贴 |
-| G3 | 系统手势区（左右边、顶部、底部导航区）禁点 |
-| G4 | 同点重复、同前台手势预算，用尽即熔断 |
-| G5 | 动作前后截图、审计记录（`safe_tap_audit.jsonl`） |
-| R3 | 派发前现拍一帧，与凭据帧比对目标所在行（48×16 灰度均差 > 6 拒绝） |
+| G1 | The credential is valid for 90 seconds; the foreground app has not changed; virtual-display credentials are bound to displayId / uniqueId / size / session |
+| G2 | A keep-out zone around view-tree nodes containing danger words (40 px padding) |
+| G2b | Empty view tree: caller confirmation + OCR danger words (full-width bands) + a visual verdict for taps; swipe-like actions are refused on the whole page when it is dangerous; keys allow only navigation and paste |
+| G3 | System gesture areas (left/right edges, top, bottom navigation area) are off-limits |
+| G4 | Repeated taps on the same point and a gesture budget per foreground app; the circuit breaks when exhausted |
+| G5 | Before/after screenshots and an audit record (`safe_tap_audit.jsonl`) |
+| R3 | Just before dispatch, capture a fresh frame and compare the target's row with the credential frame (refuse if the 48×16 grayscale mean difference is > 6) |
 
-不能将整条链路描述成“所有判定 fail-closed”：空树页的 OCR 不可用时拒绝；视觉成功返回 `impact≠none`（含 `unclear`）时拒绝，但**视觉服务异常时，若 OCR 未检出危险词、调用方已确认截图且其他闸门条件满足，仍可能仅凭 OCR 放行**，记为 `ocr_clean_ack_vision_unavailable`；已检出危险词则拒绝。依据：[OCR 分支](../agent/safe_tap.py#L1470)、[视觉判断与回退](../agent/safe_tap.py#L1514)。
+The chain must not be described as "every decision fails closed". On empty-tree pages, unavailable OCR refuses, and a successful vision verdict with `impact≠none` (including `unclear`) refuses. **When the vision service fails, an action can still be approved on OCR alone if OCR found no danger words, the caller confirmed the screenshot and the other gate conditions hold**; this is recorded as `ocr_clean_ack_vision_unavailable`. If OCR found danger words, the action is refused. Source: [OCR branch](../agent/safe_tap.py#L1477), [vision verdict and fallback](../agent/safe_tap.py#L1516).
 
-命令层的 TypeSafe 钩子另有服务不可用时的 fail-open 分支（[代码](../agent/check_gate.py#L162)）。大脑、闸门和凭据在同一个 Termux Linux 用户下运行，闸门不能防住被攻破的大脑改写或绕过它；运行权限见[大脑进程启动](../bridge/bridge.mjs#L122)。
+The command-level TypeSafe hook also has a fail-open branch when its service is unavailable ([code](../agent/check_gate.py#L162)). The brain, the gates and the credentials run as the same Termux Linux user, so the gates cannot stop a compromised brain from rewriting or bypassing them; see how the [brain process is started](../bridge/bridge.mjs#L122).
 
-## 虚拟屏（`agent/vd_session.py`）
+## Virtual display (`agent/vd_session.py`)
 
-`scrcpy --new-display=720x1600/320 --no-vd-system-decorations --no-window --no-audio` 建一块只有目标 App 的屏。`verify()` 一次 adb 往返批量核对：屏还在、uniqueId、尺寸、类型、overlay 设置、scrcpy 存活、目标 App 在该屏前台、App 进程 pid；任何一项不符就拒绝。主屏上的第三方 App 动作默认拒绝（`vd_policy`）。
+`scrcpy --new-display=720x1600/320 --no-vd-system-decorations --no-window --no-audio` creates a display that holds only the target app. `verify()` checks in one adb round trip that the display still exists, its uniqueId, size, type and overlay setting, that scrcpy is alive, that the target app is in the foreground on that display, and the app's pid; any mismatch refuses. Third-party app actions on the main display are refused by default (`vd_policy`).
 
-## 空树页（微信、淘宝系、京东 Taro 页）
+## Empty-tree pages (WeChat, Taobao-family and JD Taro pages)
 
-控件树读不到时：`look` 自动 OCR 生成 `pixel_nodes`；G2b 用 OCR 行建危险横带；点按前把目标附近 ±240px 裁图 + 红圈发给视觉模型问「点这里会发生什么」。成功返回时 `impact≠none` 拒绝；服务异常适用上面的 OCR 回退规则，不等于所有视觉失败都拒绝。依据：[裁剪与请求](../agent/vision_check.py#L36)、[判定与回退](../agent/safe_tap.py#L1508)。
+When the view tree cannot be read, `look` runs OCR automatically to produce `pixel_nodes`; G2b builds danger bands from the OCR lines; before a tap, a ±240 px crop around the target with a red circle is sent to the vision model with the question "what happens if you tap here?". A successful verdict with `impact≠none` refuses; a service failure falls under the OCR fallback rule above, so not every vision failure refuses. Source: [crop and request](../agent/vision_check.py#L36), [verdict and fallback](../agent/safe_tap.py#L1516).
 
-## 数据流与留存
+## Data flow and retention
 
-- **裁剪范围是路径级约束**：闸门视觉复核只发目标附近裁剪图，视觉定位只发指定区域裁剪图（[复核](../agent/vision_check.py#L36)、[定位](../agent/vision_check.py#L114)），不是整个大脑只收裁剪图。
-- **整屏问答另有完整截图路径**：App 的「问 DSH」将整屏截图、控件树和最近通知交给 `/ask`；API 模式直接把整屏上传到默认的 DeepSeek API；dsh 模式被引导 `read_image` 完整截图。dsh 内部图片传输实现不在本仓库，不能承诺只外发裁剪图。任务和页面文本也可能进入云端模型，手机上运行 dsh 不代表离线推理。依据：[App 输入](../app/src/com/dsb/assistant/OverlayService.java#L2241)、[问答桥接](../bridge/bridge.mjs#L523)、[API 上传](../bridge/bridge.mjs#L144)、[dsh 看图入口](../bridge/bridge.mjs#L170)。
-- **可选 TypeSafe 判定**：配置 Key 后，将可疑 shell 命令片段（最多 1500 字符）、工具名称与命中特征送往 TypeSafe 云端服务；不可用时命令钩子 fail-open。依据：[判定输入](../agent/check_gate.py#L151)、[服务与密钥](../agent/jev_client.py#L23)、[不可用分支](../agent/check_gate.py#L162)。
-- **截图落盘，审计未统一脱敏**：动作前后截图和问答截图保存在本机；`audit()` 直接序列化记录，`note` / `expect` / 视觉解释可能带入聊天、订单等原文，不能承诺零原文审计。屏幕动作审计也不覆盖大脑的每一条 bash 命令。依据：[动作记录与截图](../agent/safe_tap.py#L1923)、[审计写入](../agent/safe_tap.py#L349)、[问答截图落盘](../bridge/bridge.mjs#L87)。
+- **Cropping is a per-path constraint**: the gate's visual recheck sends only a crop around the target, and visual localization sends only a crop of the given region ([recheck](../agent/vision_check.py#L36), [localization](../agent/vision_check.py#L114)). The brain as a whole does not receive only crops.
+- **Full-screen questions have a separate full-frame path**: the App's "Ask DSH" passes a full screenshot, the view tree and recent notifications to `/ask`; API mode uploads the full frame directly to the default DeepSeek API, and dsh mode is instructed to `read_image` the full screenshot. dsh's internal image transport is not in this repository, so we cannot promise that only crops leave the phone. Task and page text can also reach the cloud model; running dsh on the phone does not mean inference is offline. Source: [App input](../app/src/com/dsb/assistant/OverlayService.java#L2273), [question bridge](../bridge/bridge.mjs#L548), [API upload](../bridge/bridge.mjs#L144), [dsh image entry](../bridge/bridge.mjs#L170).
+- **Optional TypeSafe review**: once a key is configured, suspicious shell command excerpts (up to 1500 characters), the tool name and the matched features are sent to the TypeSafe cloud service; when it is unavailable the command hook fails open. Source: [review input](../agent/check_gate.py#L151), [service and key](../agent/jev_client.py#L23), [unavailable branch](../agent/check_gate.py#L162).
+- **Screenshots are stored and audit records are not uniformly redacted**: before/after screenshots and question screenshots stay on the phone; `audit()` serializes records directly, and `note` / `expect` / vision explanations can carry chat or order text, so we do not promise plaintext-free audits. The screen-action audit also does not cover every bash command the brain runs. Source: [action records and screenshots](../agent/safe_tap.py#L1943), [audit writer](../agent/safe_tap.py#L369), [question screenshots on disk](../bridge/bridge.mjs#L87).
 
-## 中文输入（`type`）
+## Chinese text input (`type`)
 
-App 命令 `剪贴板 #写:<nonce>:<base64>` 写入剪贴板 → App 落回执 `files/clip-<nonce>.json`（操作、结果、长度等元数据，不含剪贴板原文）→ 核对回执后才发粘贴键 → 尝试清空并核验回执 → OCR 读回核验。清空失败会记录 `clipboard_cleared=false`，不能写成必然清空；更不能由回执无原文推导出所有审计都已脱敏。依据：[回执核验](../agent/safe_tap.py#L2214)、[粘贴 / 清空](../agent/safe_tap.py#L2252)。
+The App command `剪贴板 #写:<nonce>:<base64>` writes the clipboard → the App writes a receipt `files/clip-<nonce>.json` (operation, result, length and other metadata, without the clipboard text) → the paste key is sent only after the receipt checks out → DSB then tries to clear the clipboard and checks the clearing receipt → OCR reads the field back to verify. A failed clear is recorded as `clipboard_cleared=false`, so clearing is not guaranteed; and a plaintext-free receipt does not imply that all audits are redacted. Source: [receipt check](../agent/safe_tap.py#L2233), [paste / clear](../agent/safe_tap.py#L2252).
 
-## 控制面
+## Control plane
 
-| 通道 | 鉴权 / 方案 | 当前状态与依据 |
+| Channel | Authentication / design | Current status and source |
 |---|---|---|
-| `CmdReceiver` 广播（球色、剪贴板、停止等） | 接收权限 `INJECT_EVENTS`（shell/root/系统） | [Manifest 已声明权限](../app/AndroidManifest.xml#L97) |
-| adb server | Termux 私有文件套接字、无 TCP 的收口方案（R6-0） | 仅维护者设备已切换，部署工具未入库；自行安装默认仍监听 TCP 5037，其他 App 可能取得 shell 身份，见[威胁模型](THREAT-MODEL.md#4-控制权--本地控制面鉴权) |
-| App ↔ 桥接任务通道 | Termux `RUN_COMMAND` + 私有套接字（R6-1） | [任务传输代码](../app/src/com/dsb/assistant/DshClient.java#L31)与[私有监听](../bridge/private-listener.mjs#L5)已改，维护者设备 2026-10-22 切换并验收 |
+| `CmdReceiver` broadcasts (ball colour, clipboard, stop, …) | Receiver permission `INJECT_EVENTS` (shell/root/system) | [Permission declared in the manifest](../app/AndroidManifest.xml#L99) |
+| adb server | Termux-private filesystem socket, no TCP (R6-0) | The installer attempts private transport hardening by default, starting with a private bootstrap at first pairing; the maintainer's device moved to the same layout on 2026-10-23 and passed a reboot acceptance. If preflight is skipped or hardening is rolled back, ordinary TCP 5037 remains as a weaker fallback with an explicit warning, and other apps may then obtain the shell identity. This covers new installs: the public tool does not migrate legacy deployments, and package upgrades were accepted on an arm64 emulator (after a real `pkg upgrade` the old vendor adb could no longer load, while private ADB and doctor kept working); package-upgrade acceptance on the maintainer's device is still pending. See the [threat model](THREAT-MODEL.md#4-control-local-control-plane-authentication) |
+| App ↔ bridge task channel | Termux `RUN_COMMAND` + private socket (R6-1) | [Task transport code](../app/src/com/dsb/assistant/DshClient.java#L31) and the [private listener](../bridge/private-listener.mjs#L5) are in place; the maintainer's device switched over and passed acceptance on 2026-10-22 |
 
-边界见 [THREAT-MODEL.md](THREAT-MODEL.md)。
+Boundaries: [THREAT-MODEL.md](THREAT-MODEL.md).
 
-## 测试
+## Tests
 
-- `agent/`：16 套离线单测（闸门、凭据、并发、虚拟屏绑定、R3、OCR、walk、dsb_run……），全部不碰设备
-- `bridge/`：账本、取消、重启审计
-- `app/tests/`：真机门脚本与说明
-- 真机门：改闸门/桥接/App 必须附真机证据（见 CONTRIBUTING）
+- `agent/`: offline unit tests (gates, credentials, concurrency, virtual-display binding, R3, OCR, walk, dsb_run, …); none touch a device
+- `bridge/`: ledger, cancellation, restart audit
+- `installer/` and `hardening/adb-private/`: offline installer and private ADB transport tests
+- `app/tests/`: real-device gate scripts and notes
+- Real-device gate: changes to the gates, the bridge or the App need real-device evidence (see [CONTRIBUTING.md](../CONTRIBUTING.md))

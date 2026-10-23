@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 安全漏洞 / Security vulnerability
+  - name: Security vulnerability / 安全漏洞
     url: https://github.com/tianye1999/dsb/security/advisories/new
-    about: 控制面绕过、闸门绕过、隐私泄露请走私密报告，不要开公开 issue
-  - name: 安装求助 / Install help
+    about: Report control-plane bypasses, gate bypasses and privacy leaks privately, not in a public issue / 控制面绕过、闸门绕过、隐私泄露请走私密报告，不要开公开 issue
+  - name: Install help / 安装求助
     url: https://github.com/tianye1999/dsb/blob/main/docs/INSTALL.md
-    about: 先对照安装指南；仍不行再开 Bug 报告并附 doctor 输出
+    about: Check the install guide first; if it still fails, open a bug report with doctor output / 先对照安装指南，仍不行再开 Bug 报告并附 doctor 输出

@@ -9,7 +9,8 @@ import signal
 import ctypes
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from adb_policy import ROOT, load, probe, server_processes, _status_locked, pause_reason, ensure_server_locked, publish_ready, block, startup_lock, PolicyBusy, PolicyError, digest
+from adb_policy import ROOT, load, probe, server_processes, _status_locked, pause_reason, ensure_server_locked, publish_ready, block, startup_lock, PolicyBusy, PolicyError, digest, require_recent_audit, write_audit_receipt
+from adb_client import check_runtime_maps
 import socket
 
 # Android Python 不一定导出 os/signal 的 Linux 扩展；bionic 自 API 31 提供同一 pidfd API。
@@ -51,6 +52,7 @@ def managed_identity(row, config, proc_root='/proc'):
     current = next((item for item in rows if item['pid'] == row['pid']), None)
     expected = {'pid': row['pid'], 'exe': config['backend'], 'socket': 'localfilesystem:' + config['socket']}
     after = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
+    check_runtime_maps(row['pid'], config, proc_root)
     if (unknown or any(item['exe'] != config['backend'] or item['socket'] != expected['socket'] for item in rows) or
             row != expected or current != expected or before[0] in ['Z', 'X'] or
             before[19] != after[19] or uid != [str(os.getuid())] * 4 or
@@ -97,7 +99,12 @@ def check_locked():
         report = {'ok':False, 'error':pause_reason(manual_only=True)}
     else:
         try:
-            config = load()
+            try:
+                require_recent_audit(max_age=120)
+                audit_due = False
+            except (OSError, ValueError, KeyError, PolicyError):
+                audit_due = True
+            config = load(audit=audit_due)
             rows, unknown = server_processes()
             spec = 'localfilesystem:' + config['socket']
             safe = not unknown and all(p['socket']==spec and p['exe']==config['backend'] for p in rows)
@@ -114,11 +121,13 @@ def check_locked():
             # Reconnect must remain possible when the authenticated device is offline.
             report = _status_locked(check_inventory=False)
             if not report['ok']: raise RuntimeError(report['error'])
+            if audit_due:
+                write_audit_receipt()
         except Exception as exc:
             block('watchdog integrity/transport check failed: '+str(exc))
             report = {'ok':False, 'error':pause_reason(), 'servers':server_processes()}
     report.update(pid=int(sys.argv[1]) if len(sys.argv) == 2 else os.getppid(),
-                  checked_at=time.time(), generation='dsb-adb-private-v2')
+                  checked_at=time.time(), generation='dsb-adb-private-v3')
     tmp = ROOT / ('health.' + str(os.getpid()) + '.tmp')
     with open(tmp, 'w') as stream:
         json.dump(report, stream, sort_keys=True)
@@ -136,7 +145,18 @@ def main():
         with startup_lock(timeout=0):
             return check_locked()
     except PolicyBusy:
-        # 长期共享会话仍在运行，本轮不修改 ready/blocked/health，更不把未检查写成成功。
+        # Long shared clients prevent process changes, not a read-only file audit.
+        try:
+            with startup_lock(shared=True, timeout=0):
+                try:
+                    require_recent_audit(max_age=120)
+                except (OSError, ValueError, KeyError, TypeError, PolicyError):
+                    if pause_reason(manual_only=True):
+                        raise PolicyError('manual maintenance; audit receipt not renewed')
+                    load(audit=True)
+                    write_audit_receipt()
+        except PolicyBusy:
+            pass
         print('ADB_GUARD_DEFERRED: active client; no health result published', file=sys.stderr)
         return 0
 

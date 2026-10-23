@@ -354,11 +354,35 @@ web_ready() {
 doctor() {
   STAGE=自检
   local rc=0
+  local started checkpoint now
+  started=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)')
+  checkpoint=$started
+  local runtime_root="${PREFIX:-/nonexistent}/var/lib/dsb-adb"
+  if [ -f "$runtime_root/manifest.json" ]; then
+    local audit detail
+    audit=$(
+      for name in ${!LD_@}; do unset "$name"; done
+      python3 -I "$runtime_root/adb_policy.py" --policy-check
+    ) || {
+      detail=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("error", ""))' "$audit" 2>/dev/null) || detail=$audit
+      [ -n "$detail" ] || detail='未返回详细原因'
+      log "原生私有 ADB 完整审计失败：$detail；未进入容器 doctor"
+      return 2
+    }
+    printf '%s\n' "$audit"
+  fi
+  now=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)'); log "doctor_stage=native_audit ms=$((now-checkpoint))"; checkpoint=$now
   in_ubuntu python3 /root/.dsh-phone/skills/safe_tap.py doctor || rc=$?
+  now=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)'); log "doctor_stage=container ms=$((now-checkpoint))"; checkpoint=$now
   log "doctor 退出码 $rc（本次自检未调用模型）"
   if [ "$rc" != 0 ]; then
     log '基础检查未通过；未继续发送 ADB 权限查询，请先修复上方失败项'
     return 2
+  fi
+  local runtime_manifest="${PREFIX:-/nonexistent}/var/lib/dsb-adb/manifest.json"
+  if [ -f "$runtime_manifest" ] &&
+    python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("runtime") else 1)' "$runtime_manifest"; then
+    log '公共库可正常 pkg upgrade；私有副本不会自动获得安全更新，请定期运行 bash install.sh refresh 更新完整私有代'
   fi
   local permissions
   permissions=$(device_adb shell dumpsys package com.dsb.assistant) || {
@@ -379,12 +403,37 @@ doctor() {
   if device_adb shell settings get secure enabled_notification_listeners | grep -q 'com.dsb.assistant/'; then
     log '已授权：通知使用权'
   else log '待本人授权：通知使用权'; rc=2; fi
+  now=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)'); log "doctor_stage=permissions ms=$((now-checkpoint))"; checkpoint=$now
   log '仍需本人核对：ROM 自启动/后台白名单；脚本不能跨 ROM 证明它已生效'
   curl --unix-socket "$HOME/.dsb-ipc/bridge.sock" -fsS --max-time 4 http://localhost/health >/dev/null && \
     log '私有任务桥 health 正常' || { log '警告：私有任务桥未就绪'; rc=2; }
   web_ready && log '网页入口已实际验证可用' || { log '警告：网页尚未就绪，请稍后重跑 doctor'; rc=2; }
+  now=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)'); log "doctor_stage=bridge_web ms=$((now-checkpoint)) doctor_total_ms=$((now-started))"
   log '安装环境已部署。未通过的授权/亮屏/观测项需本人完成；不要把“环境就绪”当成任务验收。'
   return "$rc"
+}
+
+harden_adb() {
+  STAGE=默认ADB加固
+  local rc=0
+  if [ -f "$PREFIX/var/lib/dsb-adb/journal.json" ]; then
+    # A damaged private generation must be refreshed before bootstrap runs guard.
+    python3 "$SOURCE/hardening/adb-private/deploy.py" apply || rc=$?
+    case "$rc" in
+      0) setup_adb; return 0 ;;
+      3) log '普通回滚已收尾；先重新准备 ADB，再按全新安装加固' ;;
+      *) fail '私有 ADB 刷新失败；请运行 bash install.sh refresh 查看原因，未退回 TCP' ;;
+    esac
+  fi
+  setup_adb
+  rc=0
+  python3 "$SOURCE/hardening/adb-private/deploy.py" apply || rc=$?
+  [ "$rc" -eq 0 ] || fail 'ADB 加固预检或切换失败；查看上方 ADB_DEPLOY_ERROR，未继续安装'
+  if [ -f "$PREFIX/var/lib/dsb-adb/journal.json" ]; then
+    setup_adb
+  else
+    log 'ADB 未加固（预检跳过）；安装继续使用普通传输'
+  fi
 }
 
 main_locked() {
@@ -394,7 +443,7 @@ main_locked() {
   fi
   case "${1:-install}" in
     rollback) exec python3 "$SOURCE/hardening/adb-private/deploy.py" rollback ;;
-    check|maintenance|resume) exec python3 "$SOURCE/hardening/adb-private/deploy.py" "$1" ;;
+    refresh|recover|check|maintenance|resume) exec python3 "$SOURCE/hardening/adb-private/deploy.py" "$1" ;;
     doctor) TARGET=$(cat "$HOME/dsb/adb-target"); doctor; return ;;
     set-key)
       RF=$(find_rootfs)
@@ -404,8 +453,13 @@ main_locked() {
       log 'Key 已私密替换；重启 DSH 后使用新 Key'
       return ;;
     install) ;;
-    *) fail '用法：bash install.sh [install|doctor|check|rollback|maintenance|resume]' ;;
+    *) fail '用法：bash install.sh [install|refresh|recover|doctor|check|rollback|maintenance|resume]' ;;
   esac
+  if [ -f "$PREFIX/var/lib/dsb-adb/journal.json" ] && \
+     python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("tool_version")==1 and d.get("state")=="applied" else 1)' \
+       "$PREFIX/var/lib/dsb-adb/journal.json"; then
+    fail '公开 v1 已加固：请先运行 bash install.sh rollback，再运行 bash install.sh；不会自动迁移'
+  fi
   if [ ! -f "$HOME/.dsb-installer-managed" ] && { [ -e "$HOME/dsb/boot.sh" ] || [ -e "$HOME/wx/supervisor.sh" ]; }; then
     [ "${DSB_MIGRATE_MANUAL:-0}" = 1 ] || fail '检测到非安装器部署的旧环境；请备份并由本人评估迁移，显式 DSB_MIGRATE_MANUAL=1 才继续'
     backup="$HOME/dsb-manual-backup-$(date +%s)"
@@ -480,14 +534,7 @@ main_locked() {
   rmdir "$PACKAGE_ADB_DIRECTORY"
   setup_profiles
   setup_key
-  setup_adb
-  STAGE=默认ADB加固
-  rc=0
-  python3 "$SOURCE/hardening/adb-private/deploy.py" apply || rc=$?
-  if [ "$rc" -ne 0 ] && [ -d "$PREFIX/var/lib/dsb-adb" ]; then
-    fail '已有/未完成的加固检查失败；保留现场，请先 check/rollback，不能降级后继续'
-  fi
-  [ "$rc" -eq 0 ] || log '加固未成功；查看上方回滚结果和 doctor，安装继续'
+  harden_adb
   [ ! -f "$PREFIX/var/lib/dsb-adb/maintenance" ] || fail 'ADB 仍在维护态，需先 rollback，不能报告安装完成'
   if [ ! -d "$PREFIX/var/lib/dsb-adb" ]; then
     python3 "$SOURCE/hardening/adb-private/deploy.py" ordinary || fail '普通 ADB 恢复检查失败，禁止继续'

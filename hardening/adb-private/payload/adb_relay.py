@@ -13,7 +13,8 @@ def process_start(pid):
     if Path('/proc/self/stat').exists():
         return path.read_text().rsplit(')', 1)[1].split()[19]
     # 仅供非 Android 主机的离线 TCP 测试使用。
-    return subprocess.check_output(['ps', '-p', str(pid), '-o', 'lstart='], text=True).strip()
+    return subprocess.check_output(['ps', '-p', str(pid), '-o', 'lstart='], text=True,
+                                   env={k: v for k, v in os.environ.items() if not k.startswith('LD_')}).strip()
 
 
 def write_state(path, data):
@@ -69,6 +70,9 @@ def serve(target, state_file):
 
 
 if __name__ == '__main__':
+    for name in list(os.environ):
+        if name.startswith('LD_'):
+            os.environ.pop(name)
     if len(sys.argv) != 3:
         sys.exit(2)
     serve(sys.argv[1], sys.argv[2])

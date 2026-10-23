@@ -52,6 +52,25 @@ class Arguments(unittest.TestCase):
 
 
 class Probes(unittest.TestCase):
+    def test_offline_inventory_does_not_prevent_local_audit_receipt(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / 'manifest.json').write_text('{}')
+            config = {'backend': '/private/adb', 'socket': '/private/server.sock'}
+            row = {'pid': 42, 'exe': config['backend'], 'socket': 'localfilesystem:' + config['socket']}
+            with patch.object(policy, 'startup_lock', return_value=nullcontext()), \
+                 patch.object(policy, 'pause_reason', return_value=None), \
+                 patch.object(policy, 'load', return_value=config), \
+                 patch.object(policy, 'socket_info'), patch.object(policy, 'host_version', return_value='1'), \
+                 patch.object(policy, 'server_processes', return_value=([row], [])), \
+                 patch.object(policy, 'check_runtime_maps'), \
+                 patch.object(policy, 'probe', return_value='closed'), \
+                 patch.object(policy, '_tcp_inventory_locked', side_effect=policy.PolicyError('device offline')):
+                report = policy.status(root, audit=True)
+            self.assertFalse(report['ok'])
+            self.assertIn('device offline', report['error'])
+            policy.require_recent_audit(root)
+
     def test_live_same_uid_status_read_failure_is_unknown_not_absent(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

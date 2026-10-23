@@ -1,9 +1,11 @@
 import os
+import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from contextlib import contextmanager
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'payload'))
 import adb_guard as guard
@@ -11,6 +13,51 @@ import adb_policy as policy
 
 
 class Healing(unittest.TestCase):
+    def test_busy_shared_client_still_renews_file_audit_without_health_write(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / 'manifest.json').write_text('{}')
+
+            @contextmanager
+            def lock(*, shared=False, timeout=0):
+                if not shared:
+                    raise policy.PolicyBusy('long client')
+                yield
+
+            with patch.object(guard, 'ROOT', root), patch.object(guard, 'startup_lock', lock), \
+                 patch.object(guard, 'require_recent_audit', side_effect=policy.PolicyError('expired')), \
+                 patch.object(guard, 'pause_reason', return_value=None), \
+                 patch.object(guard, 'load', return_value={}) as full, \
+                 patch.object(guard, 'write_audit_receipt', side_effect=lambda: policy.write_audit_receipt(root)):
+                self.assertEqual(guard.main(), 0)
+                full.assert_called_once_with(audit=True)
+            policy.require_recent_audit(root)
+            self.assertFalse((root / 'health.json').exists())
+
+    def test_guard_renews_audit_at_121_seconds_while_reader_accepts_300(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / 'manifest.json').write_text('{}')
+            with patch.object(policy.time, 'time', return_value=1000):
+                policy.write_audit_receipt(root)
+            row = {'pid': 42, 'exe': '/private/adb.backend', 'socket': 'localfilesystem:/private/server.sock'}
+            config = {'backend': row['exe'], 'socket': '/private/server.sock'}
+            with patch.object(policy.time, 'time', return_value=1121), \
+                 patch.object(guard, 'ROOT', root), \
+                 patch.object(guard, 'require_recent_audit', side_effect=lambda **kw: policy.require_recent_audit(root, **kw)), \
+                 patch.object(guard, 'load', return_value=config) as load, \
+                 patch.object(guard, 'server_processes', return_value=([row], [])), \
+                 patch.object(guard, 'probe', return_value='closed'), \
+                 patch.object(guard, 'pause_reason', return_value=None), \
+                 patch.object(guard, 'publish_ready'), \
+                 patch.object(guard, '_status_locked', return_value={'ok': True}), \
+                 patch.object(guard, 'write_audit_receipt', side_effect=lambda: policy.write_audit_receipt(root)):
+                policy.require_recent_audit(root)
+                self.assertEqual(guard.check_locked(), 0)
+                load.assert_called_once_with(audit=True)
+            receipt = json.loads((root / 'runtime-audit.json').read_text())
+            self.assertEqual(receipt['checked_at'], 1121)
+
     def test_termination_requires_pidfd_and_never_falls_back_to_numeric_kill(self):
         identity = {'pid': 21, 'exe': '/p/adb.backend', 'socket': 'localfilesystem:/p/server.sock',
                     'uid': os.getuid(), 'start': '100'}

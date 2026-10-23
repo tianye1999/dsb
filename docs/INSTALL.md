@@ -1,139 +1,158 @@
-# 安装逗沙包（安装器 v1，候选版）
+# Installing DSB (installer v1, candidate)
 
-不需要 root，不需要电脑常连。Android 11+，64 位 arm64 / x86_64，建议预留至少 8 GB 空间，首次下载与解包也会临时占用空间。你唯一需要准备的服务配置是 **DeepSeek API Key**。无线配对码是 Android 的一次性授权，不是第二个服务 Key。
+**English** · [简体中文](INSTALL.zh-CN.md)
 
-> v1.0.1 安装器为候选版：验证范围目前限于维护者的一台真机与 arm64 模拟器，冻结首装和不同 ROM 验收尚待完成。下面的下载命令内联了发布包的 SHA-256（与 Release 附带的 `SHA256SUMS` 一致），校验不通过不会解包执行。APK 由维护者现有发布密钥签名，安装器按固定的证书 SHA-256 验签；安装器的模拟器测试仅用 debug 签名，不使用发布密钥。
+No root and no computer connection are needed. Requirements: Android 11+, 64-bit arm64 / x86_64, and we recommend keeping at least 8 GB free (the first download and unpacking also need temporary space). The only service credential you need is a **DeepSeek API key**. The wireless pairing code is Android's one-time authorization, not a second service key.
 
-## 1. 装 Termux 和逗沙包
+> The v1.0.2 installer is a candidate: validation so far is limited to the maintainer's device and an arm64 emulator; frozen first-install and other-ROM acceptance are still pending. The download command below pins the release tarball's SHA-256 (matching `SHA256SUMS` in the release); nothing is unpacked or run if it does not match. The APK is signed with the maintainer's existing release key, and the installer checks it against a pinned certificate SHA-256. The installer's emulator tests use a debug signature only, never the release key.
 
-在手机上安装官方 [Termux F-Droid 版](https://f-droid.org/packages/com.termux/)或 [Termux GitHub Release 版](https://github.com/termux/termux-app/releases)，版本 0.118.x 或更新。Termux 插件必须与主程序同源。安装器 v1 不支持 Play 分支或 32 位系统。
+## 1. Install Termux and DSB
 
-逗沙包使用本项目固定版本 Release 的 APK，由你在系统安装器里点「安装」。可以先安装；还没装时，第 2 步的脚本会下载并打开 APK，不会代点安装。允许侧载来源时只选择你信任的来源。
+Install the official [Termux F-Droid build](https://f-droid.org/packages/com.termux/) or the [Termux GitHub release](https://github.com/termux/termux-app/releases), version 0.118.x or later. Termux plugins must come from the same source as the main app. Installer v1 does not support the Play Store build or 32-bit systems.
 
-装好后先不要点「打开」；请先完成脚本的授权引导，特别是悬浮窗。安装器确认悬浮窗授权后才打开 App。现有 App 在缺少悬浮窗授权时直接打开可能启动服务失败。
+DSB uses the APK from this project's pinned release, and you tap "Install" in the system installer yourself. You can install it first; if it is not installed yet, the script in step 2 downloads and opens the APK, but never taps install for you. When allowing sideloading, choose only sources you trust.
 
-## 2. Termux 里跑一条命令
+After installing, do not tap "Open" yet; first finish the script's permission walkthrough, especially the overlay permission. The installer opens the App only after it confirms the overlay permission. Opening the current App without the overlay permission can make its service fail to start.
 
-打开 Termux，等待首次初始化，然后执行：
+## 2. Run one command in Termux
+
+Open Termux, wait for the first-run setup to finish, then run:
 
 ```bash
-curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.1/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' '75eefd896640eb6d59ee2481deeab2f657423f2ef3dbc9a39d0e53fd5ad2b23e' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
+curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.2/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' 'd1a782b337802c24b29ab36cdb0dfb3ac8e79b45e826b789ef5e773d4fc08553' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
 ```
 
-首次会更新 Termux 的基础库、安装 Ubuntu 24.04、Node/dsh、Python/OCR、scrcpy，下载量较大。网络需可访问 Termux、GitHub、Ubuntu、nodejs.org、npm、PyPI。`Ctrl-C` 可以中断；重跑 `bash ~/dsb-installer/install.sh` 继续，不删除容器、会话或 Key，也不重复添加 SSH 授权。
+The first run updates Termux's base libraries and installs Ubuntu 24.04, Node/dsh, Python/OCR and scrcpy, so it downloads a lot. The network must reach Termux, GitHub, Ubuntu, nodejs.org, npm and PyPI. You can interrupt with `Ctrl-C`; rerun `bash ~/dsb-installer/install.sh` to continue. Rerunning does not delete the container, sessions or key, and does not add SSH authorization twice.
 
-Ubuntu 官方软件源使用 HTTPS；最小镜像缺少 CA 时，先使用 Termux 已受信任的 CA，再由 Ubuntu 的 `ca-certificates` 包接管。不关闭 TLS 或 APT 签名校验，保留原源配置备份和自定义源。
+> **Known issue (Termux proot 5.1.107.99, released 2026-10-23)**: with this proot version, installing Ubuntu packages inside the container can stop with `proot warning: signal 11 received from process -1` (reproduced on an arm64 emulator; 5.1.107.98 works). The installer reports the failure and does not claim success. Until Termux ships a fix, install the previous version and hold it before running the command above, then rerun the installer:
+>
+> ```bash
+> pkg install proot=5.1.107.98 && apt-mark hold proot
+> ```
+>
+> Remove the hold with `apt-mark unhold proot` once a fixed proot is released (upstream: [termux/proot#420](https://github.com/termux/proot/issues/420)). If 5.1.107.98 is no longer available, check the DSB release notes for an update.
 
-安装器同步当前公开版的网页调整和逗沙包品牌包。品牌通过 web profile 的 bundles 与本地包链接接入，不重装已有 profile 依赖；保留本地自定义。web、phone、headless 的会话日志上传默认关闭，写入后用实际 dsh `--dump-config` 读回核验。工作区使用 `/root/dsb-workspaces`，不把存有 Key/SSH 私钥的 `/root` 当作工作区。
+The official Ubuntu repositories use HTTPS. If the minimal image lacks CA certificates, Termux's trusted CAs are used first, and Ubuntu's `ca-certificates` package takes over afterwards. TLS and APT signature checks are not turned off; the original source configuration is backed up and custom sources are kept.
 
-安装器会说明并开启 Termux 的 `allow-external-apps`。这是逗沙包通过官方 `RUN_COMMAND` 接口启动本机服务的前提；系统仍要求你给逗沙包单独授权。**不要给不信任的 App 运行 Termux 命令的权限**，获得它就能读写同一 Termux 用户的数据和 Key。
+The installer syncs the current public version's web tweaks and the DSB brand bundle. The brand is added through the web profile's bundles and a local package link, without reinstalling existing profile dependencies, and local customizations are kept. Session-log upload is off by default for the web, phone and headless profiles, and the installer reads the effective value back with dsh `--dump-config`. The workspace is `/root/dsb-workspaces`; `/root`, which holds the key and SSH private key, is not used as a workspace.
 
-## 3. 填 DeepSeek API Key
+The installer explains and enables Termux's `allow-external-apps`. DSB needs it to start local services through the official `RUN_COMMAND` interface, and the system still asks you to grant DSB that permission separately. **Never give an untrusted app permission to run Termux commands**: with it, the app can read and write all data of the same Termux user, including the key.
 
-脚本只询问一次，输入时不显示字符。保存到 Ubuntu 的 `/root/.dsh/.deepseek-key`，目录 0700、文件 0600。重跑保留原 Key，不再询问。安装日志 `~/dsb-install.log` 只记状态，不记录 Key，也不收集命令的原始输出。
+## 3. Enter your DeepSeek API key
 
-输错时运行 `bash ~/dsb-installer/install.sh set-key` 隐藏输入并原子替换，重启 DSH 后使用新值。只有开始真实任务才会产生模型调用。环境安装和 doctor 不调用模型。
+The script asks once and does not echo what you type. The key is saved to Ubuntu's `/root/.dsh/.deepseek-key` (directory 0700, file 0600). Reruns keep the existing key and do not ask again. The install log `~/dsb-install.log` records only status, never the key, and does not collect raw command output.
 
-## 4. 按提示点几下
+If you typed it wrong, run `bash ~/dsb-installer/install.sh set-key` to enter it hidden and replace it atomically; restart DSH to use the new value. Model calls happen only when you start real tasks; environment installation and doctor do not call the model.
 
-按脚本逐步引导完成，能够直接打开的系统设置页会自动打开：
+## 4. Follow the prompts and tap a few things
 
-1. 开发者选项 → 无线调试 → 使用配对码配对。尚无开发者选项时，先到「关于手机」连续点版本号/Build number 七次，按系统要求确认本人身份，再返回。将配对页的地址和六位配对码输入脚本，再输入无线调试主页的**连接端口**。两种端口不同。建议分屏查看，避免配对页关闭后端口失效；系统不允许从后台打开页面时，回到 Termux 前台再按回车，或手动进入对应设置页。
-2. 如果尚未安装逗沙包，打开方式选「软件包安装程序 / Package installer」（不是 Termux），在系统安装器中确认安装。允许 Termux 安装未知来源后若只回到终端，按回车重新打开安装器；若系统结束了 Termux，重新打开 Termux、重跑同一安装命令即可续装，不用再填 Key。
-3. 允许逗沙包悬浮窗、无障碍服务、通知使用权、通知权限，以及「运行 Termux 命令」权限。侧载限制开启时，需要你在应用详情菜单中确认「允许受限设置」。部分系统要先在被禁用的权限页点一次、看到拒绝提示，应用详情右上菜单才会出现此项；确认后返回权限页开启。脚本不会写系统设置替你授权。
-4. 在 ROM 的自启动/后台管理中允许 Termux 和逗沙包，电池设为不受限。ROM 名称不同；安装器不能证明白名单已经生效。
-5. 回到 Termux 按回车，脚本起服务并跑 doctor。按失败项完成剩余操作，之后执行 `bash ~/dsb-installer/install.sh doctor`。
-6. 解锁并亮屏，打开逗沙包；首次确认 DSH Preview 提示。如果显示 Choose workspace，选择安装器自动创建的 Default workspace，不需要填写目录。确认网页、悬浮球和无障碍观测正常。先下一个低风险只读任务，例如「查看系统计算器当前显示，不输入、不修改」。假 Key 测试无法完成真实模型任务。
+Follow the script step by step; system settings pages that can be opened directly are opened for you:
 
-**doctor 结果要分开看**：`DOCTOR_FAIL` 表示有必需项未满足；`ADB 未加固` 是预检跳过/已回滚的安全警告，不会单独让其余正常的 DSB 失败。出现“已加固但检查失败”则严格失败，不降级为普通 ADB。
+1. Developer options → Wireless debugging → Pair device with pairing code. If you have no developer options yet, go to "About phone", tap the version number / build number seven times, confirm your identity as the system asks, then go back. Enter the pairing page's address and six-digit code into the script, then the **connection port** shown on the wireless debugging main page. The two ports are different. Split screen helps, so the port does not expire when the pairing page closes. If the system does not allow opening a page from the background, bring Termux to the foreground and press Enter, or open the settings page manually.
+2. If DSB is not installed yet, choose "Package installer" (not Termux) to open the APK and confirm the installation in the system installer. If allowing Termux to install unknown apps only returns you to the terminal, press Enter to reopen the installer. If the system ended Termux, reopen Termux and rerun the same install command to continue; you do not need to enter the key again.
+3. Grant DSB the overlay, accessibility service, notification access and notification permissions, plus the "Run Termux commands" permission. If sideloading restrictions are on, you need to confirm "Allow restricted settings" from the top-right menu of the app details page. On some systems you must first tap the disabled permission once and see the refusal message before that menu item appears; after confirming, go back and turn the permission on. The script never writes system settings to grant permissions for you.
+4. In your ROM's auto-start / background management, allow Termux and DSB, and set battery usage to unrestricted. ROMs name these differently, and the installer cannot prove the allowlist has taken effect.
+5. Return to Termux and press Enter; the script starts the services and runs doctor. Fix any failed items, then run `bash ~/dsb-installer/install.sh doctor`.
+6. Unlock the phone, keep the screen on and open DSB; confirm the DSH Preview notice the first time. If it shows Choose workspace, pick the Default workspace the installer created; you do not need to enter a directory. Check that the web UI, the floating ball and accessibility observation work. Start with a low-risk read-only task, such as "look at what the system calculator shows; do not type or change anything". A fake key cannot complete real model tasks.
 
-## 设备相关数值：哪些需要调整
+**Read doctor results separately**: `DOCTOR_FAIL` means a required item is not met. `ADB not hardened` (shown as 「ADB 未加固」 in the installer output) is a security warning for a skipped preflight or a rollback; on its own it does not make an otherwise healthy DSB fail. "Hardened but check failed" fails strictly and is never downgraded to ordinary ADB.
 
-**使用安装器时，不需要手改设备标识或 ADB 选择器。** 以下值由本机探测或现场生成，不从维护者设备复制：
+## Device-specific values: what needs adjusting
 
-- **ADB 连接目标**：首次按提示输入配对地址和连接端口，核验后保存到 `~/dsb/adb-target`；之后重连会尝试保存地址或匹配本机标识的 mDNS 服务。地址和服务名都只是候选，每个新连接必须通过本机 shell 身份挑战，失败即断开；mDNS 不可用且端口改变时，重跑安装器更新端口。
-- **实际 transport serial**：不是保存的 IP:端口，而是每个新连接生成的私有 `localfilesystem:` 通道。凭据在 `~/dsb/adb-transport.json`，同时绑定 server 代次、transport ID 和通道；脚本通过统一入口选择已验证的 transport，不要手填或复用旧通道名。
-- **Termux UID、路径与 ADB 入口**：安装时核验本机 UID、实际 Ubuntu rootfs 路径和两侧 ADB 入口，加固 launcher 由本机 clang 现场编译。当前只支持官方 Termux 私有目录，不是任意路径均可配置；无需照抄维护者的 UID 或路径。
+**With the installer you do not need to edit any device identifier or ADB selector by hand.** The following values are detected on your device or generated on the spot, never copied from the maintainer's device:
 
-下面是所有安装共用的固定默认值，不是设备标识；TCP 服务只监听本机回环，socket 则是本机私有文件套接字：
+- **ADB connection target**: on first run you enter the pairing address and connection port; after verification they are saved to `~/dsb/adb-target`. Later reconnects try the saved address or an mDNS service matching this device. Both the address and the service name are only candidates: every new connection must pass this device's shell identity challenge and is dropped if it fails. If mDNS is unavailable and the port changed, rerun the installer to update the port.
+- **Actual transport serial**: not the saved IP:port, but a private `localfilesystem:` channel created for each new connection. The credential is in `~/dsb/adb-transport.json` and is bound to the server generation, the transport ID and the channel. Scripts select the verified transport through a single entry point; do not type or reuse old channel names.
+- **Termux UID, paths and ADB entry points**: the installer verifies this device's UID, the actual Ubuntu rootfs path and the ADB entry points on both sides, and compiles the hardening launcher with the local clang. Only the official Termux private directory is supported; arbitrary paths are not configurable, and you do not need to copy the maintainer's UID or paths.
 
-| 项目 | 默认值与调整边界 |
+The following are fixed defaults shared by every installation, not device identifiers. TCP services listen only on loopback, and the sockets are local private filesystem sockets:
+
+| Item | Default and limits on changing it |
 |---|---|
-| SSH | `127.0.0.1:8022`；由 `installer/ssh_config.py` 生成配置，`termux/tsh.sh` 与安装器校验也固定使用该端口 |
-| DSH 网页 | `127.0.0.1:3080`；启动命令在 `termux/start-dsh.sh`，就绪检查、可信入口与 App 也依赖该端口 |
-| 私有 socket | ADB server 为 `$PREFIX/var/run/dsb-adb/server.sock`，任务桥为 `~/.dsb-ipc/bridge.sock`；路径由部署及调用代码约定，不是上面的随机 transport 通道名 |
+| SSH | `127.0.0.1:8022`; the configuration is generated by `installer/ssh_config.py`, and `termux/tsh.sh` and the installer checks also use this port |
+| DSH web UI | `127.0.0.1:3080`; started by `termux/start-dsh.sh`, and the readiness check, trusted entry and App also depend on this port |
+| Private sockets | ADB server: `$PREFIX/var/run/dsb-adb/server.sock`; task bridge: `~/.dsb-ipc/bridge.sock`. These paths are fixed by the deployment and calling code, and are not the random transport channel names above |
 
-当前安装器**不提供端口或 socket 路径配置项**。调整需要修改源码并同步调用方与校验，不能只改 `sshd_config` 或一条启动命令。
+The installer currently **has no option to configure ports or socket paths**. Changing them means editing the source and keeping every caller and check in sync; changing only `sshd_config` or one start command is not enough.
 
-`127.0.0.1:5555` 只是**未使用安装器的旧手动安装默认值**，不是新安装要填写的端口。`DSB_ADB_SERIAL` 没有代码读取，设置它不会改变连接。文档、注释或示例中的维护者设备数值不适用于其他设备，不要照抄；按本机安装提示操作即可。
+`127.0.0.1:5555` is only **the default of the old manual setup without the installer**, not a port to enter for new installations. No code reads `DSB_ADB_SERIAL`, so setting it does not change the connection. Values from the maintainer's device in documents, comments or examples do not apply to other devices; do not copy them, just follow the installer's prompts on your own device.
 
-实现依据：[安装器](../install.sh)、[重连脚本](../termux/wx_adb_connect.sh)、[私有传输](../hardening/adb-private/README.md)、[agent ADB 入口](../agent/adb_endpoint.py)。
+Source: [installer](../install.sh), [reconnect script](../termux/wx_adb_connect.sh), [private transport](../hardening/adb-private/README.md), [agent ADB entry](../agent/adb_endpoint.py).
 
-## 默认 ADB 加固
+## Default ADB hardening
 
-从第一次配对起就使用私有 filesystem socket，配对码不经 TCP 5037。IPv4/IPv6 5037 若有外来或无法识别的监听，红色退出，绝不归入预检跳过。设备身份使用短时 shell 跨 UID 挑战，不相信公开的 boot ID 或序列号。
+From the very first pairing, DSB uses a private filesystem socket, so the pairing code never goes over TCP 5037. If anything foreign or unidentifiable listens on IPv4/IPv6 5037, the installer exits in red; this is never treated as a skipped preflight. Device identity is checked with a short-lived cross-UID shell challenge, not with the public boot ID or serial number.
 
-安装器默认尝试把 ADB server 从共享 TCP 5037 改为 Termux 私有目录下的 filesystem socket。安装前探测本机 UID、容器路径、ADB 入口、进程和设备身份；不满足则不改入口，显示原因。切换后检查私有 socket、关键文件、入口 shell UID、IPv4/IPv6 5037 和 ADB 进程持有的 TCP 监听；自检失败自动回滚。
+By default the installer tries to move the ADB server from the shared TCP 5037 to a filesystem socket in a Termux-private directory. Before installing, it probes the local UID, container path, ADB entry points, processes and device identity; if something does not fit, it leaves the entry points unchanged and shows why. After switching, it checks the private socket, key files, the entry points' shell UID, IPv4/IPv6 5037 and any TCP listeners held by ADB processes. If the switch is interrupted, it first completes the verified private deployment instead of forcing a fallback to an ordinary ADB that may no longer load.
 
-这是 server 传输加固，不是把 Android 无线调试或 `RUN_COMMAND` 变成沙箱。已获得 ADB 授权、Termux 执行权或 root 的主体仍在信任边界内。详见 [加固说明和回滚](../hardening/adb-private/README.md)。
+This hardens the server transport; it does not turn Android wireless debugging or `RUN_COMMAND` into a sandbox. Parties with ADB authorization, Termux execution rights or root remain inside the trust boundary. See the [hardening notes and rollback](../hardening/adb-private/README.md).
 
 ```bash
-# 原生 Termux 中运行，不在 Ubuntu 里运行
+# Run in native Termux, not inside Ubuntu
 python3 ~/dsb-installer/hardening/adb-private/deploy.py check
 bash ~/dsb-installer/install.sh rollback
 ```
 
-回滚恢复普通 ADB TCP 传输，保留 Key、App、容器、会话和其它服务。重跑默认安装器会再次尝试加固。升级 `android-tools`/Ubuntu `adb` 前先回滚；v1 不会自动重签新版本关键文件或掩盖哈希漂移。
+Rollback restores the ordinary ADB TCP transport and keeps the key, App, container, sessions and other services. If the ordinary vendor ADB can no longer load with the upgraded public libraries, rollback refuses before stopping or changing anything; DSB says private ADB is still usable only after confirming the private service is healthy.
 
-无线端口变化时，保存地址和匹配名称的 mDNS 服务只是候选；连接后仍须重新通过 shell 身份挑战，失败即断开，不能仅凭地址或名称称为已核验本机。凭据同时绑定 server 代次、transport ID 和私有 filesystem 通道；通道只转发一次实际连接，断开后不能在旧 ID 上接入新端点。部分 Termux adb 不支持 mDNS，此时打开无线调试并重跑安装器更新连接端口，不必重复填写 Key。候选版仍须完成冻结首装和不同 ROM 验收。
+### Package upgrades and the private ADB runtime
 
-回滚到普通 TCP 是较弱的可用性回退：doctor 会校验监听归属并在冲突时失败，但不能把独立的检查与后续 TCP 连接称为原子身份保证。需要私有传输边界时，应先恢复加固，不要忽略「ADB 未加固」警告。
+- **What the installer sets up**: the hardened ADB server runs a frozen copy of `adb`. The installer works out exactly which non-system shared libraries it needs and copies them into a private directory, locked by per-file hashes. Only the ADB packages on both sides are held; no new hold is added on public shared library packages.
+- **`pkg upgrade` is safe**: Termux's public libraries can be upgraded normally, without rolling back first. The private copy keeps the ADB server working.
+- **Security updates need a refresh**: the private copy does not receive library security updates automatically. After updating the package index, run `bash ~/dsb-installer/install.sh refresh` (or rerun the default installer) to refresh the backend and its libraries as one generation, then run `check` / `doctor`. Refresh verifies the local service first and does not need the wireless device to be online; the existing device binding is kept and re-authenticated on the next real reconnect.
+- **What you see when something is wrong**: doctor runs the full audit on the native side; inside the container it only reads a short-lived audit receipt plus a metadata quick check. If the private runtime is missing, changed or fails to load, ADB calls are refused (the guard also pauses ADB) and doctor reports the reason with the next step (for example `ADB_PRIVATE_RUNTIME_DRIFT` or `ADB_BACKEND_LOAD_FAILED`). DSB never falls back to the public libraries or TCP.
 
-首次新建 Ubuntu 时，安装器暂缓网页/任务桥，只运行 SSH 和 ADB 守护；完成授权引导后才释放首装标记并起服务。这样不会在 Android 的来源授权结束 Termux 之前提前建立任务归属。**任务桥已经运行后**若发生崩溃或归属不明，原 A6 保护仍会拒绝重新接收任务。安装器不会删除旧 socket、pid 或账本来冒充恢复；doctor 报出实际失败，需要人工核对旧任务。这与安装步骤续装是不同的验收层。
+Legacy compatibility, recovery after a failed refresh and the limits of security updates are covered in the [ADB private transport notes](../hardening/adb-private/README.md).
 
-## 开发与测试
+When the wireless port changes, the saved address and the mDNS service with a matching name are only candidates; every connection must pass the shell identity challenge again and is dropped if it fails, so an address or name alone never counts as a verified device. The credential is bound to the server generation, the transport ID and the private filesystem channel. A channel forwards one real connection only, and after a disconnect a new endpoint cannot attach to the old ID. Some Termux adb builds do not support mDNS; in that case turn on wireless debugging and rerun the installer to update the connection port, without entering the key again. The candidate still needs frozen first-install and other-ROM acceptance.
 
-从完整仓库运行 `bash install.sh`。开发覆盖项不属于普通用户配置：
+Rolling back to ordinary TCP is a weaker availability fallback: doctor checks who owns the listener and fails on conflicts, but a separate check followed by a TCP connection cannot be called an atomic identity guarantee. If you need the private transport boundary, restore hardening first; do not ignore the "ADB not hardened" warning.
 
-| 环境变量 | 用途 |
+When Ubuntu is created for the first time, the installer holds back the web UI and task bridge and runs only the SSH and ADB daemons; it releases the first-install marker and starts the services only after the permission walkthrough. This way no task ownership is established before Android's install-source authorization might end Termux. **Once the task bridge is running**, if it crashes or its ownership becomes unclear, the original A6 protection still refuses to accept tasks again. The installer does not delete old sockets, pid files or the ledger to fake a recovery; doctor reports the actual failure, and old tasks need a manual check. This is a different acceptance layer from resuming installation steps.
+
+## Development and testing
+
+Run `bash install.sh` from a full repository checkout. Development overrides are not part of normal user configuration:
+
+| Environment variable | Purpose |
 |---|---|
-| `DSB_APK_PATH` | 使用本地 APK 路径；模拟器只用 debug 签名 |
-| `DSB_TEST_APK_SHA256` | 本地 debug APK 的实测 SHA-256，缺失/不符均不打开 APK |
-| `DSB_TEST_APK_CERT_SHA256` | 仅与本地 APK 测试路径一起使用的 debug 签名证书 SHA-256；已有包也必须完整验签 |
-| `DEEPSEEK_API_KEY` | 预置假 Key 进行测试；脚本立即取消导出，不传给安装依赖命令 |
-| `DSB_ADB_TARGET` | 测试中已配对的本机 IPv4:连接端口；仍核验设备身份，不绕过授权 |
-| `DSB_NONINTERACTIVE=1` | 不等待手动步骤；不假定授权已完成，doctor 仍返回真实结果 |
-| `DSB_MIGRATE_MANUAL=1` | 显式迁移旧手动安装（先备份脚本）；旧版 R6-0b 仍无条件拒绝 |
+| `DSB_APK_PATH` | Use a local APK path; emulators use only a debug signature |
+| `DSB_TEST_APK_SHA256` | The measured SHA-256 of the local debug APK; if missing or mismatched, the APK is not opened |
+| `DSB_TEST_APK_CERT_SHA256` | Debug signing certificate SHA-256, used only with the local APK test path; an existing package must still pass full signature verification |
+| `DEEPSEEK_API_KEY` | Preset a fake key for testing; the script unexports it immediately and does not pass it to dependency installers |
+| `DSB_ADB_TARGET` | A paired local IPv4:connection port for tests; device identity is still verified and authorization is not bypassed |
+| `DSB_NONINTERACTIVE=1` | Do not wait for manual steps; authorization is not assumed complete, and doctor still returns real results |
+| `DSB_MIGRATE_MANUAL=1` | Explicitly migrate an old manual installation (back up the scripts first); old R6-0b deployments are still refused unconditionally |
 
-DSH 版本唯一来源为 `installer/release.json`，安装器和 CI 都读此文件。release 包用 `installer/build_release.py` 装配，固定 APK hash，并携带两架构固定 NDK 对象/NOTICE，手机不必访问 googlesource。直接跑开发源码但材料缓存为空时才需要该域名。
+The single source of the DSH version is `installer/release.json`; both the installer and CI read it. The release package is assembled by `installer/build_release.py`, which pins the APK hash and carries pinned NDK objects/NOTICE for both architectures, so the phone does not need to reach googlesource. That domain is needed only when running development sources with an empty materials cache.
 
-不要在 shell 命令行输入真实 Key，也不要把带真实 Key 的环境打印到 issue。普通用户应使用隐藏交互输入。
+Do not type a real key on the shell command line, and do not paste an environment containing a real key into an issue. Normal users should use the hidden interactive prompt.
 
-## 附录：手动部署、构建和升级
+## Appendix: manual deployment, building and upgrading
 
-手动维护也应先使用本页入口完成私有 bootstrap、配对和加固，不要将旧脚本里的固定端口、旧 supervisor 或 `cp agent/*` 用作新部署。安装器部署的目标位置为：
+Manual maintenance should also go through this page's entry point to complete the private bootstrap, pairing and hardening first. Do not use the fixed ports, old supervisor or `cp agent/*` from old scripts for new deployments. The installer deploys to:
 
-| 内容 | 位置 |
+| Content | Location |
 |---|---|
-| agent 与技能 | Ubuntu `/root/.dsh-phone/skills`、`/root/.dsh/skills/dsb-phone` |
-| bridge / dsh-config | Ubuntu `/root/dsh-bridge`、`/root/dsh-config` |
-| Termux 原生脚本 / 容器副本 | `~/dsb`、Ubuntu `/root/termux-dsb` |
-| SSH 容器私钥 / Termux 授权 | Ubuntu `/root/.ssh`、Termux `~/.ssh/authorized_keys` |
-| Key / 专用工作目录 | Ubuntu `/root/.dsh/.deepseek-key`、`/root/dsb-workspaces` |
+| agent and skills | Ubuntu `/root/.dsh-phone/skills`, `/root/.dsh/skills/dsb-phone` |
+| bridge / dsh-config | Ubuntu `/root/dsh-bridge`, `/root/dsh-config` |
+| Native Termux scripts / container copies | `~/dsb`, Ubuntu `/root/termux-dsb` |
+| Container SSH private key / Termux authorization | Ubuntu `/root/.ssh`, Termux `~/.ssh/authorized_keys` |
+| Key / dedicated workspace | Ubuntu `/root/.dsh/.deepseek-key`, `/root/dsb-workspaces` |
 
-更新代码前先结束虚拟屏会话并运行 `check`；需要升级 adb 包时先 `rollback`，保留 journal 与备份，不手工覆盖受管入口。旧手动环境必须显式 `DSB_MIGRATE_MANUAL=1`，安装器会备份 Termux 脚本及容器 skills/bridge/dsh-config；旧版 R6-0b 仍需 owner 在场迁移。
+Before updating the code, end any virtual-display session and run `check`. To upgrade the adb packages themselves, `rollback` first; the journal and backups are kept, and managed entry points must not be overwritten by hand. An old manual environment requires an explicit `DSB_MIGRATE_MANUAL=1`; the installer backs up the Termux scripts and the container's skills/bridge/dsh-config. Old R6-0b deployments still need the owner present to migrate.
 
-手动启动与自检：
+Manual start and self-check:
 
 ```bash
 bash ~/dsb/boot.sh
 proot-distro login ubuntu -- python3 /root/.dsh-phone/skills/safe_tap.py doctor
 ```
 
-从源码构建 App 用 `app/build.sh`，在手机上签名构建用 `app/build-phone.sh`。正式 APK 使用 owner 已有发布密钥，不能重新生成密钥代替；升级仍由用户确认安装。`sync-dsh-config.sh` 是运行目录同步到副本，不能初始化新环境。
+Build the App from source with `app/build.sh`; to build and sign on the phone, use `app/build-phone.sh`. Official APKs use the owner's existing release key, which cannot be replaced by generating a new one; upgrades are still confirmed by the user. `sync-dsh-config.sh` syncs the running directory to the copy and cannot initialize a new environment.
 
-安装器修改 SSH 前会备份 `$PREFIX/etc/ssh/sshd_config.pre-dsb`。已有 sshd 进程不会自动重载，必须本人重启并核对监听。需要还原时停止当前 sshd，将该备份恢复为 `sshd_config`，运行 `sshd -t` 后重新启动；确认影响现有远程会话后再操作。`~/.termux/termux.properties.pre-dsb` 同样保留首次修改前内容。
+Before changing SSH, the installer backs up `$PREFIX/etc/ssh/sshd_config.pre-dsb`. A running sshd does not reload automatically; you must restart it yourself and check what it listens on. To restore, stop the current sshd, restore that backup as `sshd_config`, run `sshd -t`, then start it again; consider the impact on existing remote sessions first. `~/.termux/termux.properties.pre-dsb` likewise keeps the content from before the first change.
 
-公开 APK 的升级必须用**同一签名密钥**重新构建，并由用户确认安装；不会后台下载或代点更新。发现已有 `com.dsb.assistant` 时，安装器先完整验签并比对固定证书 SHA-256；不符即停止，不凭包名接受或覆盖。
+Upgrading the public APK requires rebuilding with **the same signing key**, and the user confirms the installation; nothing is downloaded in the background and updates are never tapped for you. If `com.dsb.assistant` is already installed, the installer first verifies its full signature against the pinned certificate SHA-256; on mismatch it stops, and it never accepts or overwrites a package based on its name alone.
 
-划掉逗沙包代表退出，手机侧服务按现有退出协议停止。卸载 App 与删除 Termux/Ubuntu 数据是不同操作；删除后会丢失本地 Key、任务和会话，请自行确认备份后再操作。
+Swiping DSB away means quitting, and the phone-side services stop under the existing exit protocol. Uninstalling the App and deleting Termux/Ubuntu data are different operations; deleting loses the local key, tasks and sessions, so make sure you have backups before doing it.

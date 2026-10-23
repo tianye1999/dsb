@@ -1,32 +1,30 @@
-# Security Policy / 安全策略
+# Security Policy
 
-逗沙包的核心卖点是「可信委托」：AI 只做杂务，决定权留给人。所以凡是能让这个承诺落空的问题，我们都当安全问题处理。
+**English** · [简体中文](SECURITY.zh-CN.md)
 
-## 什么算安全问题（What counts）
+DSB's core promise is trusted delegation: the AI only does chores, and decisions stay with people. So we treat anything that can break that promise as a security issue.
 
-- 绕过执行闸门（G1–G5、空树页 OCR + 视觉判断、派发前复核），让 AI 能点到付款、发送、删除、授权这类按钮
-- 绕过本地控制面鉴权：手机上其他 App 能给逗沙包下指令、往大脑会话注入消息、冒充桥接服务
-- 任务账本失效：同一任务被重复执行，或「停止」被确认了但实际没停
-- 隐私泄露：截图、聊天内容、订单内容、验证码、剪贴板原文出现在日志、审计、回执或仓库里
-- 威胁模型（`docs/THREAT-MODEL.md`）里声明的边界与实际行为不符
+## What counts
 
-## 怎么报告（How to report）
+- Bypassing the execution gates (G1–G5, OCR + visual verdicts on empty-tree pages, the pre-dispatch recheck) so that the AI can tap buttons such as pay, send, delete or authorize
+- Bypassing local control-plane authentication: another app on the phone can give DSB commands, inject messages into the brain's session, or impersonate the bridge service
+- Task-ledger failures: the same task runs twice, or "stop" is confirmed but the task did not actually stop
+- Privacy leaks: screenshots, chat content, order content, verification codes or clipboard text appearing in logs, audits, receipts or the repository
+- Any mismatch between the boundaries stated in the threat model (`docs/THREAT-MODEL.md`) and real behaviour
 
-**请不要公开开 issue。** 使用 GitHub 的[私密漏洞报告](https://github.com/tianye1999/dsb/security/advisories/new)（仓库页 → Security → Report a vulnerability）。
-请附上：复现步骤、影响范围、涉及的设备与 Android 版本。如果你有修复建议或 PoC，一并附上。
+## How to report
 
-这是个人维护的项目：我会尽量在 **7 天内** 确认收到，并在修复发布前与你同步进度；修复后在发布说明中致谢（除非你不希望）。
+**Please do not open a public issue.** Use GitHub's [private vulnerability reporting](https://github.com/tianye1999/dsb/security/advisories/new) (repository page → Security → Report a vulnerability).
+Include the reproduction steps, the impact, and the device and Android version involved. If you have a suggested fix or a PoC, attach it as well.
 
-## 范围外（Out of scope）
+This is a personally maintained project: I will try to acknowledge your report **within 7 days**, keep you updated until the fix is released, and credit you in the release notes (unless you prefer not to be).
 
-- 需要物理接触手机、或已经取得 root / 已授权 ADB 调试 / 已拥有 Termux 执行权限的攻击者（这些主体在威胁模型里被视为与逗沙包同等信任）
-- 第三方 App（微信、淘宝等）自身的漏洞
-- 大模型输出错误本身（除非它导致闸门被绕过）
+## Out of scope
+
+- Attackers who need physical access to the phone, or who already have root / authorized ADB debugging / Termux execution rights (the threat model treats these parties as trusted as much as DSB itself)
+- Vulnerabilities in third-party apps themselves (WeChat, Taobao, …)
+- Wrong model output by itself (unless it leads to a gate bypass)
 
 ## Supported versions
 
 Only the latest release on the `main` branch receives security fixes.
-
----
-
-*English summary:* Report vulnerabilities privately via GitHub's ["Report a vulnerability"](https://github.com/tianye1999/dsb/security/advisories/new). In scope: execution-gate bypass, local control-plane auth bypass, task-ledger idempotency/stop failures, privacy leaks, and any mismatch between `docs/THREAT-MODEL.md` and real behaviour. Out of scope: attackers with physical access, root, authorized ADB, or Termux execution rights. Best-effort acknowledgement within 7 days.

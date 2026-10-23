@@ -23,7 +23,7 @@ def start_tcp(native):
     rows, _ = policy.server_processes()
     if rows:
         return
-    env = dict(os.environ)
+    env = policy.backend_env()
     env['ADB_EMU'] = '0'
     for name in ['ADB_SERVER_SOCKET', 'ANDROID_ADB_SERVER_ADDRESS', 'ANDROID_ADB_SERVER_PORT']:
         env.pop(name, None)
@@ -115,8 +115,10 @@ def deployed_gate(prefix):
         raise Conflict('旧版部署或非可信目录，需 owner 在场迁移；未写入')
     journal = json.loads((root / 'journal.json').read_text())
     manifest = json.loads((root / 'manifest.json').read_text())
-    if (journal.get('schema') != 'dsb-adb-private/v1' or journal.get('tool_version') != 1 or
-            manifest.get('schema') != 'dsb-adb-private/v1' or manifest.get('tool_version') != 1 or
+    if journal.get('tool_version') == 1 and journal.get('state') == 'applied':
+        raise Conflict('公开 v1 已加固：请先运行 bash install.sh rollback，再运行 bash install.sh；未改入口')
+    if (journal.get('schema') != 'dsb-adb-private/v1' or journal.get('tool_version') not in [1, 2, 3] or
+            manifest.get('schema') != 'dsb-adb-private/v1' or manifest.get('tool_version') not in [1, 2, 3] or
             journal.get('state') != 'applied' or not {'target_file', 'container_paths'} <= manifest.keys() or
             any(str(row.get('destination', '')).endswith('.r60-vendor')
                 for data in [journal, manifest] for row in data.get('diversions', []))):
@@ -130,7 +132,8 @@ def _prepare(prefix):
         # 系统授权页可能结束整个 Termux UID。先用有界 guard 恢复 server，
         # 后续 wx 做 shell 挑战与重连；不能要求离线设备预先通过完整 inventory。
         deployed_gate(prefix)
-        subprocess.run([str(prefix / 'bin/python3'), '-I', str(root / 'adb_guard.py')], check=True, timeout=12)
+        subprocess.run([str(prefix / 'bin/python3'), '-I', str(root / 'adb_guard.py')], check=True, timeout=12,
+                       env=policy.backend_env())
         return
     directory = prefix / 'var/run/dsb-adb-bootstrap'
     spec = 'localfilesystem:' + str(directory / 'server.sock')
@@ -159,7 +162,7 @@ def _prepare(prefix):
     policy.private_dir(directory)
     os.umask(0o177)
     subprocess.run([str(native), '-L', spec, 'start-server'], check=True, timeout=10,
-                   env={**os.environ, 'ADB_EMU': '0'})
+                   env={**policy.backend_env(), 'ADB_EMU': '0'})
     policy.socket_info(directory / 'server.sock')
 
 

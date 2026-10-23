@@ -1,35 +1,37 @@
-# App 与 Termux 的大负载传输
+# Large payloads between the App and Termux
 
-## 是什么
+**English** · [简体中文](TRUSTED-TRANSPORT.zh-CN.md)
 
-任务仍由 Termux 官方 RUN_COMMAND 接收小型固定元数据。请求与回复保留在 App 私有 spool；Termux 经私有 ADB 服务访问受 INJECT_EVENTS 接收权限保护的 CmdReceiver，随后只访问 Termux 私有 Unix 套接字。不新增 TCP 写入口、ContentProvider 或 URI 授权。
+## What it is
 
-两个方向分别限长：READ 最多 64 KiB 原始字节，通过广播 result data 返回；WRITE 最多 32 KiB 原始字节，通过 base64 命令参数送入。READ 必须显式请求长度并收到恰好对应的字节数，短读或超长立即拒绝，不自动减小块或重试任务。缺少 length 的旧调用仍读 12 KiB，便于旧接收脚本与新 App 共存。
+Tasks are still received through Termux's official RUN_COMMAND, carrying only small, fixed metadata. Requests and replies stay in the App's private spool; Termux reaches the `CmdReceiver`, which is protected by the INJECT_EVENTS receiver permission, through the private ADB server, and after that only talks to a Termux-private Unix socket. No new TCP write entry, ContentProvider or URI grant is added.
 
-完整请求先核对长度、SHA256 和 JSON 路由，然后再做一次零负载 READ 检查 nonce/有效期，才允许执行。回复仍按长度、摘要和偏移收齐后原子发布；超时不等于停止确认，任务账本、task_id 幂等及停止回执语义不变。
+Each direction has its own limit: a READ returns at most 64 KiB of raw bytes through the broadcast result data; a WRITE sends at most 32 KiB of raw bytes as a base64 command argument. A READ must request its length explicitly and receive exactly that many bytes; a short or oversized read is refused immediately, without shrinking the chunk or retrying the task. Old calls without a length still read 12 KiB, so old receiver scripts can coexist with the new App.
 
-## 为什么
+A complete request first has its length, SHA256 and JSON route checked, then a zero-payload READ checks the nonce and expiry, and only then may it run. Replies are still collected by length, digest and offset, then published atomically; a timeout is not a stop confirmation, and the task ledger, `task_id` idempotency and stop-receipt semantics are unchanged.
 
-12 KiB 对称分块把每次 shell/广播启动的固定成本重复太多次。广播不是通用大文件总线；但在约 1 MiB 请求、有限小回复的目标范围，固定小块仍能避免新增导出组件。
+## Why
 
-| 路线 | 普通 App 能否取得内容 | 必须成立的条件与风险 | 1 MiB 请求的开销预估 |
+Symmetric 12 KiB chunks repeated the fixed cost of each shell/broadcast start too many times. Broadcasts are not a general bus for large files; but for the target range of about 1 MiB requests with bounded small replies, fixed small chunks still avoid adding an exported component.
+
+| Route | Can an ordinary app get the content? | Conditions that must hold, and risks | Estimated overhead for a 1 MiB request |
 | --- | --- | --- | --- |
-| READ 64 KiB / WRITE 32 KiB，保留受保护广播 | 不持有 INJECT_EVENTS 不能访问接收器；知道 request_id 也仍需 nonce。root、系统、持该权限的平台签名 App 仍在信任边界内 | 大 result data 必须完整；WRITE 的完整命令须低于设备参数上限；多个在途 Binder 事务共享缓冲，不能把单次上限当并发保证 | 16 次 READ + 1 次有效期检查 + 小回复 1 次 WRITE，共 18 次；每调用 60 ms 时约 1.08 秒固定成本，不含启动/调度。实际目标仍需设备验证 |
-| 仅 shell UID 的 ContentProvider，以 content read/write 流式传输 | 必须在 Binder 入口核对实际调用 UID=2000，禁 URI grants，不信 URI 自报身份。普通 App、root/system 均不因路径已知而放行 | FD/pipe 可避开大 Binder 参数，但新增导出入口；必须限制 URI/模式/长度、关闭超时 FD、验证摘要并原子提交。CLI 写成功退出并不证明后台 pipe 已收齐；跨线程前须保存经验证的 UID，不能在线程中重新读取调用者身份 | 请求和回复各一次流式命令，加一次执行前存活检查，常数 3 次；预计固定成本低于广播分块，但依赖 OEM content 命令和 pipe 实测 |
-| 把完整请求放 RUN_COMMAND stdin，或放公共文件再通知 | 前者仍受 RUN_COMMAND 权限保护；后者普通 App 可能读取/替换，不能作为明文替代 | stdin 是 Intent 字符串，并不是跨 UID 的私有文件流；大 JSON 仍进入 Binder。公共文件需要额外加密、认证和生命周期协议，或不再满足原边界 | 不能可靠处理约 1 MiB 的 base64 截图；不是本轮备选 |
+| READ 64 KiB / WRITE 32 KiB over the protected broadcast | Without INJECT_EVENTS it cannot reach the receiver; knowing the request_id still requires the nonce. Root, the system and platform-signed apps holding the permission remain inside the trust boundary | Large result data must arrive complete; the full WRITE command must stay under the device's argument limit; several in-flight Binder transactions share one buffer, so the single-call limit is not a concurrency guarantee | 16 READs + 1 expiry check + 1 WRITE for the small reply, 18 calls in total; at 60 ms per call that is about 1.08 s of fixed cost, excluding start-up/scheduling. The real target still needs device verification |
+| A shell-UID-only ContentProvider, streaming with `content read/write` | The Binder entry must check that the actual calling UID is 2000, forbid URI grants and never trust identity claimed in the URI. Ordinary apps, and root/system, are not let in just because they know the path | FDs/pipes avoid large Binder arguments, but add an exported entry; URI/mode/length must be restricted, timed-out FDs closed, digests verified and commits atomic. A successful CLI write exit does not prove the background pipe received everything; the verified UID must be saved before switching threads, and the caller identity must not be re-read inside the thread | One streaming command each for request and reply, plus one liveness check before execution: a constant 3 calls; fixed cost should be lower than broadcast chunks, but it depends on OEM `content` commands and measured pipe behaviour |
+| Put the whole request in RUN_COMMAND stdin, or in a public file and then notify | The former is still protected by the RUN_COMMAND permission; with the latter an ordinary app may read or replace the file, so it cannot replace plaintext | stdin is an Intent string, not a private cross-UID file stream; large JSON still goes through Binder. A public file needs extra encryption, authentication and lifecycle protocols, or it no longer meets the original boundary | Cannot reliably carry a base64 screenshot of about 1 MiB; not a candidate this round |
 
-采用第一条，不以调高到 Binder 极限为目标。32 KiB WRITE 的 base64 是 43,692 个字符，完整 argv 另做 56 KiB 上界断言；64 KiB READ 的 base64 是 87,384 个字符，不作为 adb 命令参数。Android 文档说明 Binder 的约 1 MiB 缓冲由进程内在途事务共享，返回值也可能因缓冲不足失败，因此不得把大返回视为无限制。[TransactionTooLargeException](https://developer.android.com/reference/android/os/TransactionTooLargeException)
+We chose the first route, without aiming to push up to the Binder limit. The base64 of a 32 KiB WRITE is 43,692 characters, and the full argv has a separate 56 KiB upper-bound assertion; the base64 of a 64 KiB READ is 87,384 characters and is never used as an adb command argument. The Android documentation says Binder's roughly 1 MiB buffer is shared by a process's in-flight transactions, and return values can also fail when the buffer runs short, so a large return must not be treated as unlimited. [TransactionTooLargeException](https://developer.android.com/reference/android/os/TransactionTooLargeException)
 
-ContentProvider 的只读/只写 FD 可以是 pipe；其调用者身份应从真实 Binder UID 取得。它是后续超出当前负载范围时的候选，不在本版注册生产入口。[ContentProvider.openFile](https://developer.android.com/reference/android/content/ContentProvider#openFile(android.net.Uri,%20java.lang.String))、[Binder.getCallingUid](https://developer.android.com/reference/android/os/Binder#getCallingUid())
+A ContentProvider's read-only/write-only FD can be a pipe, and its caller identity should come from the real Binder UID. It is a candidate if payloads later outgrow the current range; this version does not register a production entry for it. [ContentProvider.openFile](https://developer.android.com/reference/android/content/ContentProvider#openFile(android.net.Uri,%20java.lang.String)), [Binder.getCallingUid](https://developer.android.com/reference/android/os/Binder#getCallingUid())
 
-现路线依赖以下边界，任何一条不成立均应拒绝而非降级到 HTTP：RUN_COMMAND 的权限与 allow-external-apps 已正确配置；ADB_SERVER_SOCKET 固定到私有文件套接字、目标身份是 shell；Manifest 的接收权限未被移除；am 有序广播返回格式完整；spool 的 nonce、长度、有效期及摘要校验仍成功。App 被强停、Termux/ADB 不可用、ROM 截断结果或 Binder 并发不足，都可能使通道失败，不能据此声称任务未执行。
+The current route depends on the following boundaries; if any of them does not hold, the channel must refuse rather than fall back to HTTP: RUN_COMMAND permission and allow-external-apps are configured correctly; ADB_SERVER_SOCKET is pinned to the private filesystem socket and the target identity is shell; the receiver permission in the manifest has not been removed; the `am` ordered-broadcast result format is complete; the spool's nonce, length, expiry and digest checks still pass. A force-stopped App, unavailable Termux/ADB, a ROM that truncates results, or insufficient Binder concurrency can all make the channel fail, and none of these lets us claim that the task did not run.
 
-本边界不防 root、已授权 ADB、持 INJECT_EVENTS 的平台代码、Termux 同 UID/proot 内的恶意代码，或已获用户 RUN_COMMAND 权限的其它 App 利用 Termux 执行任意命令。私有 ADB 套接字防普通本机 App 抢连，不把所有可能获得 shell 的来源变为 DSB 专属。
+This boundary does not defend against root, authorized ADB, platform code holding INJECT_EVENTS, malicious code under Termux's UID or inside proot, or other apps that the user has granted the RUN_COMMAND permission using Termux to run arbitrary commands. The private ADB socket stops ordinary local apps from grabbing the connection; it does not make every possible source of a shell identity exclusive to DSB.
 
-## 怎么验证
+## How it is verified
 
-- `python3 termux/test-trusted-entry.py` 验证实际读写函数、精确分块、摘要、固定命令和调用次数。1 MiB JSON 请求加小回复最多 18 次广播；1,224,867 B 请求最多 21 次；1 MiB 图片经 base64 包装并附至多 1 KiB JSON 元数据，最多 24 次。回复超过 32 KiB 时另按 ceil(reply_bytes / 32768) 计数，不伪称全尺寸回复也仅一次。
-- `node app/tests/run-trusted-files-tests.mjs` 编译并执行真实 TrustedFiles，验证 64 KiB READ、旧 12 KiB 默认、长度/nonce/有效期拒绝、32 KiB WRITE、重放一致性和原子发布。
-- 在独立临时模拟器测试 result data 的完整长度与摘要、WRITE 参数边界及 content 二进制读写/普通 UID 拒绝；探针不打进产品 APK，模拟器结论不能冒充 OEM 真机上限。
-- 设备窗口仍以 /ask、/step 各 2 次预热和 10 次正式样本验收：median <= 4 秒、p95 <= 8 秒、单次 <= 10 秒且无错误。失败回滚，不临时加权限、开 HTTP 或放宽门槛。
-- 真机结果（Android 16 开发验证机，约 1.2 MB 请求）：12 KiB 对称分块时 median 约 6.0 秒（不达标、已回滚）；本版 /ask median 1.49 秒、p95 1.59 秒，/step median 1.52 秒、p95 1.63 秒。
+- `python3 termux/test-trusted-entry.py` checks the actual read/write functions, exact chunking, digests, fixed commands and call counts. A 1 MiB JSON request plus a small reply takes at most 18 broadcasts; a 1,224,867 B request at most 21; a 1 MiB image wrapped in base64 with up to 1 KiB of JSON metadata at most 24. Replies over 32 KiB are counted separately as ceil(reply_bytes / 32768); we do not pretend a full-size reply takes only one call.
+- `node app/tests/run-trusted-files-tests.mjs` compiles and runs the real TrustedFiles, checking 64 KiB READ, the old 12 KiB default, length/nonce/expiry refusals, 32 KiB WRITE, replay consistency and atomic publishing.
+- On a separate temporary emulator, we tested full-length result data and digests, WRITE argument limits, and binary `content` read/write with refusal for ordinary UIDs; the probes are not built into the product APK, and emulator results do not stand in for OEM device limits.
+- On a device, acceptance still uses 2 warm-up runs and 10 measured samples each for /ask and /step: median <= 4 s, p95 <= 8 s, every run <= 10 s and no errors. On failure we roll back, without adding permissions, opening HTTP or relaxing the thresholds.
+- Device results (an Android 16 development phone, requests of about 1.2 MB): with symmetric 12 KiB chunks the median was about 6.0 s (failed, rolled back); with this version /ask had a median of 1.49 s and p95 of 1.59 s, and /step a median of 1.52 s and p95 of 1.63 s.

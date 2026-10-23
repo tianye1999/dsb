@@ -5,6 +5,8 @@ from pathlib import Path
 import tempfile
 import unittest
 import os
+import shutil
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -15,6 +17,27 @@ spec.loader.exec_module(deploy)
 
 
 class ReviewRegressions(unittest.TestCase):
+    def test_compiled_launcher_removes_ld_environment_before_python_exec(self):
+        compiler = shutil.which('cc')
+        if compiler is None:
+            self.skipTest('C compiler unavailable')
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = root / 'capture.py'
+            output = root / 'environment.json'
+            target.write_text('#!/usr/bin/env python3\nimport json, os\n'
+                              'open(os.environ["DSB_TEST_ENV_FILE"], "w").write(json.dumps(dict(os.environ)))\n')
+            target.chmod(0o700)
+            launcher = root / 'launcher'
+            subprocess.run([compiler, '-Wall', '-Wextra', '-Werror',
+                            '-DROOT_PATH=' + json.dumps(str(root)),
+                            '-DSOCKET_PATH=' + json.dumps(str(root / 'server.sock')),
+                            '-DPYTHON=' + json.dumps(str(target)),
+                            str(BASE / 'payload/adb_launcher.c'), '-o', str(launcher)], check=True)
+            env = dict(os.environ, LD_FAKE='must-not-reach-python', DSB_TEST_ENV_FILE=str(output))
+            subprocess.run([str(launcher), 'devices'], check=True, env=env)
+            self.assertFalse(any(name.startswith('LD_') for name in json.loads(output.read_text())))
+
     def test_bootstrap_missing_manifest_fields_refuses_before_any_lock_or_guard_write(self):
         with tempfile.TemporaryDirectory() as d:
             prefix = Path(d)
@@ -25,7 +48,7 @@ class ReviewRegressions(unittest.TestCase):
             (root / 'manifest.json').write_text(json.dumps({'schema': deploy.SCHEMA, 'tool_version': 1}))
             before = {str(p): p.read_bytes() for p in prefix.rglob('*') if p.is_file()}
             with patch.object(deploy.bootstrap.subprocess, 'run') as run, \
-                 self.assertRaisesRegex(deploy.bootstrap.Conflict, '旧版部署'):
+                 self.assertRaisesRegex(deploy.bootstrap.Conflict, '先运行 bash install.sh rollback'):
                 deploy.bootstrap.prepare(prefix)
             self.assertEqual(before, {str(p): p.read_bytes() for p in prefix.rglob('*') if p.is_file()})
             self.assertFalse((prefix / 'var/run').exists())
@@ -56,7 +79,7 @@ class ReviewRegressions(unittest.TestCase):
                             deploy.bootstrap.tcp_owner(native)
 
     def test_future_or_missing_staging_version_is_never_deleted(self):
-        for version in [None, 2]:
+        for version in [None, deploy.TOOL_VERSION + 1]:
             with self.subTest(version=version), tempfile.TemporaryDirectory() as d:
                 root = Path(d) / 'dsb-adb'
                 staging = Path(d) / 'dsb-adb-stage-other'
@@ -70,7 +93,7 @@ class ReviewRegressions(unittest.TestCase):
                 self.assertEqual(journal.read_bytes(), before)
 
     def test_legacy_cli_rejects_before_state_directory_or_lock_creation(self):
-        for operation in ['recover', 'apply', 'rollback', 'resume', 'maintenance']:
+        for operation in ['recover', 'apply', 'refresh', 'rollback', 'resume', 'maintenance']:
             with self.subTest(operation=operation), tempfile.TemporaryDirectory() as d:
                 base = Path(d)
                 root = base / 'deployment'
@@ -97,19 +120,21 @@ class ReviewRegressions(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, patch.object(deploy, 'H', Path(d)), \
              patch.object(deploy, 'supervisors', return_value=[]), \
              patch.dict(deploy.os.environ, {'ADB_SERVER_SOCKET': 'localfilesystem:/install-only',
-                                           'ANDROID_ADB_SERVER_ADDRESS': 'untrusted.invalid'}), \
+                                           'ANDROID_ADB_SERVER_ADDRESS': 'untrusted.invalid',
+                                           'LD_FAKE': 'must-not-propagate'}), \
              patch.object(deploy.subprocess, 'Popen') as spawn:
             (Path(d) / 'wx').mkdir()
             deploy.start_supervisor()
             self.assertNotIn('ADB_SERVER_SOCKET', spawn.call_args.kwargs['env'])
             self.assertNotIn('ANDROID_ADB_SERVER_ADDRESS', spawn.call_args.kwargs['env'])
+            self.assertNotIn('LD_FAKE', spawn.call_args.kwargs['env'])
 
     def test_hardened_restart_uses_guard_before_reconnect_not_full_offline_inventory(self):
         with tempfile.TemporaryDirectory() as d:
             prefix = Path(d)
             root = prefix / 'var/lib/dsb-adb'
             root.mkdir(parents=True)
-            data = {'schema': deploy.SCHEMA, 'tool_version': 1, 'state': 'applied',
+            data = {'schema': deploy.SCHEMA, 'tool_version': 2, 'state': 'applied',
                     'target_file': '/test/target', 'container_paths': []}
             for name in ['journal.json', 'manifest.json']:
                 (root / name).write_text(json.dumps(data))
@@ -126,7 +151,8 @@ class ReviewRegressions(unittest.TestCase):
             target.write_text('127.0.0.1:45678')
             txn = deploy.Transaction(root)
             txn.data['baseline'] = {'rootfs': d, 'packages': {}, 'holds': {}, 'server': {'pid': 42}}
-            txn.save()
+            txn.data['private_config'] = {}
+            txn.event('applied')
             with patch.object(deploy, 'ROOT', root), patch.object(deploy, 'TARGET', target), \
                  patch.object(deploy, 'require_native'), patch.object(deploy, 'packages', return_value={}), \
                  patch.object(deploy, 'supervisors', return_value=[]), \
@@ -134,7 +160,7 @@ class ReviewRegressions(unittest.TestCase):
                  patch.object(deploy.policy, 'server_processes', return_value=([], [])), \
                  patch.object(deploy.policy, 'probe', side_effect=['listening', 'closed']), \
                  patch.object(deploy, 'record_state') as record, \
-                 self.assertRaises(deploy.bootstrap.Conflict):
+                 self.assertRaises(deploy.DeployError):
                 deploy.rollback()
             self.assertEqual(deploy.Transaction(root).data['state'], 'rollback-failed')
             self.assertEqual(record.call_args.args[0], 'rollback-failed')

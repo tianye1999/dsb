@@ -1,57 +1,57 @@
-name: Bug 报告 / Bug report
-description: 逗沙包做错了、拒绝了不该拒的、或者卡住了
+name: Bug report / Bug 报告
+description: DSB did something wrong, refused something it shouldn't have, or got stuck / 逗沙包做错了、拒绝了不该拒的、或者卡住了
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        **隐私提醒：** 不要贴聊天记录、订单内容、验证码、联系人名字的截图或原文。审计日志片段请先把这些内容打码。
         **Privacy:** never paste screenshots or text containing chats, orders, verification codes or contact names. Redact audit-log excerpts first.
-        安全漏洞请不要在这里报，走仓库 Security → Report a vulnerability。
+        **隐私提醒：** 不要贴聊天记录、订单内容、验证码、联系人名字的截图或原文。审计日志片段请先把这些内容打码。
+        Do not report security vulnerabilities here; use Security → Report a vulnerability. 安全漏洞请不要在这里报，走仓库 Security → Report a vulnerability。
   - type: textarea
     id: what
     attributes:
-      label: 发生了什么 / What happened
-      description: 你让它做什么、它做了什么、你期望什么
+      label: What happened / 发生了什么
+      description: What you asked it to do, what it did, and what you expected / 你让它做什么、它做了什么、你期望什么
     validations:
       required: true
   - type: textarea
     id: steps
     attributes:
-      label: 复现步骤 / Steps to reproduce
+      label: Steps to reproduce / 复现步骤
       placeholder: |
-        1. 下任务「……」
-        2. 它打开了 …… 然后 ……
+        1. Task: "…" / 下任务「……」
+        2. It opened … and then … / 它打开了 …… 然后 ……
     validations:
       required: true
   - type: input
     id: device
     attributes:
-      label: 机型 / Android 版本 / ROM
-      placeholder: "例：品牌 型号 / Android 15 / 厂商系统版本"
+      label: Device / Android version / ROM (机型 / Android 版本 / ROM)
+      placeholder: "e.g. brand model / Android 15 / vendor OS version（例：品牌 型号 / Android 15 / 厂商系统版本）"
     validations:
       required: true
   - type: input
     id: version
     attributes:
-      label: 逗沙包版本（App 版本 + 仓库提交号）
+      label: DSB version (App version + repository commit) / 逗沙包版本（App 版本 + 仓库提交号）
     validations:
       required: true
   - type: textarea
     id: doctor
     attributes:
-      label: "`safe_tap.py doctor` 输出"
+      label: "`safe_tap.py doctor` output / 输出"
       render: text
   - type: textarea
     id: audit
     attributes:
-      label: 审计日志片段（已打码）/ Audit excerpt (redacted)
-      description: "`agent/safe_tap_audit.jsonl` 里相关的几行，只保留 kind / allowed / reason / ack_detail / vision 等字段"
+      label: Audit excerpt (redacted) / 审计日志片段（已打码）
+      description: "The relevant lines of `agent/safe_tap_audit.jsonl`, keeping only fields such as kind / allowed / reason / ack_detail / vision. 只保留这些字段。"
       render: json
   - type: checkboxes
     id: gate
     attributes:
-      label: 如果是「闸门拒绝」类问题
+      label: If this is about a gate refusal / 如果是「闸门拒绝」类问题
       options:
-        - label: 我看过拒绝理由，确认这个动作本身是安全的（不是付款/发送/删除/授权）
-        - label: 我没有试图通过改配置、换手势来绕过闸门
+        - label: I read the refusal reason and confirmed the action itself is safe (not pay/send/delete/authorize) / 我看过拒绝理由，确认这个动作本身是安全的
+        - label: I did not try to bypass the gate by changing config or gestures / 我没有试图通过改配置、换手势来绕过闸门
