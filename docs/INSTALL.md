@@ -4,7 +4,7 @@
 
 No root and no computer connection are needed. Requirements: Android 11+, 64-bit arm64 / x86_64, and we recommend keeping at least 8 GB free (the first download and unpacking also need temporary space). The only service credential you need is a **DeepSeek API key**. The wireless pairing code is Android's one-time authorization, not a second service key.
 
-> The v1.0.2 installer is a candidate: validation so far is limited to the maintainer's device and an arm64 emulator; frozen first-install and other-ROM acceptance are still pending. The download command below pins the release tarball's SHA-256 (matching `SHA256SUMS` in the release); nothing is unpacked or run if it does not match. The APK is signed with the maintainer's existing release key, and the installer checks it against a pinned certificate SHA-256. The installer's emulator tests use a debug signature only, never the release key.
+> The v1.0.3 installer is a candidate: validation so far is limited to the maintainer's device and an arm64 emulator; frozen first-install and other-ROM acceptance are still pending. The download command below pins the release tarball's SHA-256 (matching `SHA256SUMS` in the release); nothing is unpacked or run if it does not match. The APK is signed with the maintainer's existing release key, and the installer checks it against a pinned certificate SHA-256. The installer's emulator tests use a debug signature only, never the release key.
 
 ## 1. Install Termux and DSB
 
@@ -19,7 +19,7 @@ After installing, do not tap "Open" yet; first finish the script's permission wa
 Open Termux, wait for the first-run setup to finish, then run:
 
 ```bash
-curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.2/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' 'd1a782b337802c24b29ab36cdb0dfb3ac8e79b45e826b789ef5e773d4fc08553' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
+curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.3/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' 'af9d85a726f939c89261eed755ff063ae3274a732aacfa899eb46e2ba453b3c6' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
 ```
 
 The first run updates Termux's base libraries and installs Ubuntu 24.04, Node/dsh, Python/OCR and scrcpy, so it downloads a lot. The network must reach Termux, GitHub, Ubuntu, nodejs.org, npm and PyPI. You can interrupt with `Ctrl-C`; rerun `bash ~/dsb-installer/install.sh` to continue. Rerunning does not delete the container, sessions or key, and does not add SSH authorization twice.

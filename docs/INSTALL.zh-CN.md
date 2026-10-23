@@ -4,7 +4,7 @@
 
 不需要 root，不需要电脑常连。Android 11+，64 位 arm64 / x86_64，建议预留至少 8 GB 空间，首次下载与解包也会临时占用空间。你唯一需要准备的服务配置是 **DeepSeek API Key**。无线配对码是 Android 的一次性授权，不是第二个服务 Key。
 
-> v1.0.2 安装器为候选版：验证范围目前限于维护者的一台真机与 arm64 模拟器，冻结首装和不同 ROM 验收尚待完成。下面的下载命令内联了发布包的 SHA-256（与 Release 附带的 `SHA256SUMS` 一致），校验不通过不会解包执行。APK 由维护者现有发布密钥签名，安装器按固定的证书 SHA-256 验签；安装器的模拟器测试仅用 debug 签名，不使用发布密钥。
+> v1.0.3 安装器为候选版：验证范围目前限于维护者的一台真机与 arm64 模拟器，冻结首装和不同 ROM 验收尚待完成。下面的下载命令内联了发布包的 SHA-256（与 Release 附带的 `SHA256SUMS` 一致），校验不通过不会解包执行。APK 由维护者现有发布密钥签名，安装器按固定的证书 SHA-256 验签；安装器的模拟器测试仅用 debug 签名，不使用发布密钥。
 
 ## 1. 装 Termux 和逗沙包
 
@@ -19,7 +19,7 @@
 打开 Termux，等待首次初始化，然后执行：
 
 ```bash
-curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.2/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' 'd1a782b337802c24b29ab36cdb0dfb3ac8e79b45e826b789ef5e773d4fc08553' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
+curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.3/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' 'af9d85a726f939c89261eed755ff063ae3274a732aacfa899eb46e2ba453b3c6' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
 ```
 
 首次会更新 Termux 的基础库、安装 Ubuntu 24.04、Node/dsh、Python/OCR、scrcpy，下载量较大。网络需可访问 Termux、GitHub、Ubuntu、nodejs.org、npm、PyPI。`Ctrl-C` 可以中断；重跑 `bash ~/dsb-installer/install.sh` 继续，不删除容器、会话或 Key，也不重复添加 SSH 授权。
