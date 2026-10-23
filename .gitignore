@@ -1,0 +1,63 @@
+# ---- 永不入库：个人数据与凭据 ----
+# 截图 / 录像 / 证据
+**/safe_tap_shots/
+**/wx_shots/
+**/evidence/
+*.jpg
+*.jpeg
+*.png
+# 例外：App 启动图标（Codex 生成的插画，不是截图），只放行这两个文件名
+!app/res/mipmap-*/ic_launcher_foreground.png
+!app/res/mipmap-*/ic_launcher_monochrome.png
+*.mkv
+*.mp4
+# 审计、会话、任务账本、收件箱
+**/safe_tap_audit.jsonl*
+**/*.audit.jsonl
+**/sessions/
+**/bridge-tasks.json*
+**/inbox.jsonl
+**/watch_subs.json
+# 运行时状态（脚本在自身目录写入；入库会泄露屏幕文字/任务描述，或让新装机跳过保存原设置）
+**/screen_guard_state.json
+**/ocr_cache.json
+**/ocr_cache.json.lock
+**/vd_session.json
+**/safe_tap_state.json
+**/inbox_seen.json
+**/.watcher.lock
+**/.safe_tap.lock
+**/*.runs/
+# 记忆、熟路笔记、交接
+**/MEMORY.md
+**/HANDOVER.md
+**/paths/
+**/agent_workspace/
+# 密钥与口令
+*.keystore
+*.jks
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+**/.dsh-web-token
+**/termux-user
+
+# ---- 构建产物与缓存 ----
+build/
+*.apk
+*.apk.idsig
+__pycache__/
+*.pyc
+node_modules/
+.DS_Store
+
+# ---- 临时备份 ----
+*.bak
+*.bak-*
+*.orig
+*.tmp
+dsh-web-tweaks/backups/
+.playwright-cli/
+output/playwright/

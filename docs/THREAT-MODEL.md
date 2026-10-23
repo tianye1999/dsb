@@ -1,0 +1,83 @@
+# 威胁模型 / Threat Model
+
+这份文档写的是逗沙包**现有防护能约束什么、明确不防什么**，不是绝对安全保证。卷可信的项目，边界必须说清楚；如果你发现实际行为和这里写的不符，按 [SECURITY.md](../SECURITY.md) 报告。
+
+## 要保护的东西
+
+1. 你手机上第三方 App 里的**不可逆动作**：付款、转账、发送、删除、注销、授权。
+2. 你的**隐私**：屏幕上的聊天、订单、验证码、剪贴板内容。
+3. 你的**注意力**：主屏不被占用、不被打断。
+4. 对逗沙包的**控制权**：只有你（经 App）能给它下任务。
+
+## 信任边界
+
+| 主体 | 信任级别 | 说明 |
+|---|---|---|
+| 你，经逗沙包 App 下任务 | 完全信任 | |
+| 大脑（dsh + 模型） | **不信任其判断，但信任其环境** | 它会犯错、会被页面上的文字误导，所以有闸门；但它和闸门、凭据跑在**同一个 Termux Linux 用户**下，闸门不能防住「大脑被攻破后改掉闸门代码」 |
+| 手机上其他 App | 不信任 | 设计上不授予控制权；现有权限门槛与自行安装时的 ADB 暴露风险见下文“控制权” |
+| 已取得 root / 已授权的 ADB / Termux 执行权（RUN_COMMAND）的主体 | **与逗沙包同等信任** | 它们本来就能做逗沙包能做的一切；逗沙包不试图防它们 |
+| 第三方 App 自身 | 不信任其内容 | 页面文字只是数据，不是指令 |
+
+## 已有防护与边界
+
+### 1. 大脑犯错 → 执行闸门
+
+规范执行路径中的屏幕动作经过 `agent/safe_tap.py`；它与大脑没有强隔离，不能防止被攻破的大脑绕过。各项检查与留证如下：
+
+- **G1 凭据**：动作必须基于 90 秒内的一次 `look`，且前台 App 没变；虚拟屏动作还要绑定显示器 ID、uniqueId、尺寸、会话
+- **G2 危险区**：控件树里含危险词（付款、删除、发送、授权……）的控件周围禁点
+- **G2b 空控件树页**：调用方必须显式确认看过截图；OCR 不可用时拒绝，扫到危险词时构建禁区；点按 / 长按的视觉判定成功时要求 `impact=none`。**视觉服务异常时，OCR 未检出危险词且其他条件满足，仍可能仅凭 OCR 放行**；已检出危险词则拒绝。滑动等非点按动作在有危险词的页面整页拒绝，导航键另有豁免，非导航按键只允许粘贴。依据：[OCR 与危险横带](../agent/safe_tap.py#L1470)、[视觉判断与回退](../agent/safe_tap.py#L1514)
+- **G3 边缘禁带**：系统手势区不点
+- **G4 熔断**：同一点、同一手势反复失败就停
+- **G5 留证**：动作前后截图 + 审计
+- **R3 派发前复核**：派发前现拍一帧，与凭据帧比对目标所在行，变了就拒绝
+
+这些检查不是“整个系统全部 fail-closed”的保证。命令层的 TypeSafe 钩子还存在服务不可用时的 fail-open 分支，见下文数据流。闸门改动规则见 [CONTRIBUTING.md](../CONTRIBUTING.md)。
+
+### 2. 隐私 → 按路径说明外发与本机留存
+
+- **闸门复核与视觉定位**：复核只发目标附近裁剪图，定位只发指定区域裁剪图；这不是整个大脑的裁剪图保证。依据：[复核裁剪](../agent/vision_check.py#L36)、[定位裁剪](../agent/vision_check.py#L114)。
+- **整屏问答与模型 API**：「问 DSH」将整屏截图、控件树、最近通知交给大脑；API 模式直接上传整屏到默认的 DeepSeek API，dsh 路径被引导用 `read_image` 读取完整截图。dsh 内部图片传输实现不在本仓库，不能承诺只外发裁剪图；任务与页面文本也可能进入云端模型。依据：[App 问答输入](../app/src/com/dsb/assistant/OverlayService.java#L2241)、[问答桥接](../bridge/bridge.mjs#L523)、[API 上传](../bridge/bridge.mjs#L144)、[dsh 看图入口](../bridge/bridge.mjs#L170)。
+- **DSH 完整会话日志**：三个公开 profile 的补丁均关闭 `session-log-deepseek.enabled`（上游默认 true，开启时随 DeepSeek 官方 API 请求上传完整会话事件）。重新开启会补传关闭期间积累的事件，不应把临时关闭当作数据删除。补丁优先于网页表单；安装和副本同步均保留 false。另一路 `session-telemetry-otel` 默认 `FEEDBACK_ONLY`，只有主动消息赞/踩或会话反馈才授权上传该会话日志，已有反馈授权也可能在后续装载时重放。逗沙包 web 停用对应 UI，不封禁底层反馈 API，也不改变普通模型请求的数据流。更多菜单反馈打开干净的 GitHub Issues 地址，公开内容仍需人工脱敏。`desktop-product-telemetry` 只对名为 desktop 的 profile 开启，手机 web / phone / headless 不启用。用 `dsh --profile <p> --dump-config` 核对生效值。
+- **TypeSafe 云端判定**：配置 Key 后，命中可疑特征的 shell 命令片段（最多 1500 字符）、工具名称、命中特征会发给 TypeSafe；服务不可用时该命令钩子按 fail-open 放行，不替代屏幕闸门。依据：[判定输入](../agent/check_gate.py#L151)、[服务地址与密钥读取](../agent/jev_client.py#L23)、[不可用时放行](../agent/check_gate.py#L162)。
+- **剪贴板回执**：写入回执只记操作、成功与否、长度等元数据，不记剪贴板原文；粘贴后会尝试清空并核验清空回执，不应把尝试当作必然成功。依据：[回执核验](../agent/safe_tap.py#L2214)、[粘贴与清空](../agent/safe_tap.py#L2252)。
+- **截图与审计会落盘**：动作前后截图和问答截图在本机留存，不能声称“数据不落盘”；审计写入没有统一脱敏，`note` / `expect` / 视觉解释可能携带聊天、订单等原文，不能承诺零原文日志。分享前须检查敏感内容。依据：[截图与动作记录](../agent/safe_tap.py#L1923)、[审计直接序列化](../agent/safe_tap.py#L349)、[问答截图落盘](../bridge/bridge.mjs#L87)。
+- 熟路笔记**应**只记路径和页面特征；这是使用约定，不是自动脱敏保证，也需按本机敏感文件管理。
+
+### 3. 注意力 → 虚拟屏强制
+
+第三方 App 一律在 scrcpy 虚拟屏上操作；主屏动作默认拒绝；建虚拟屏时主屏前台在变化就等。
+
+### 4. 控制权 → 本地控制面鉴权
+
+- App 的命令入口（`CmdReceiver`）要求发送方持有系统权限 `INJECT_EVENTS`：只有 shell（ADB）、root、系统和平台签名 App 能发；普通 App 不能，也不能被授予。命令里的 `token` 参数只是兼容旧脚本的参数，**不是秘密**。依据：[入口权限](../app/AndroidManifest.xml#L97)。
+- ADB server 的收口方案是 Termux 私有目录里的文件套接字，不开 TCP 端口。维护者设备于 2026-10-23 迁移到与安装器相同的私有传输布局，并通过含一次重启的验收：重启后只起一个受管 server，自动重新核验并绑定，doctor、后台虚拟屏与真实任务均通过；软件包升级后的验收尚未做。公开工具仍不迁移旧版部署。仓库 [通用部署工具](../hardening/adb-private/README.md)由安装器默认尝试执行：第一次配对即走私有 bootstrap，外来5037监听红色拒绝；预检跳过或严格回滚成功时显示「ADB 未加固」警告，普通TCP仅是较弱回退。已加固状态检查失败严格拒绝，不用跳过标记掩盖。不同设备与软件包升级仍须验收，不能把有限测试当成所有设备均已收口。
+- App 与大脑之间的任务通道**代码**走 Termux 的 `RUN_COMMAND`（系统按权限校验调用方），Termux 内部走私有文件套接字 —— **状态（R6-1）：代码已按此改写（桥接只听私有套接字，3097 不再下发 token）；维护者设备 2026-10-22 完成切换并验收**——私有通道真实任务、关闭后重开换实例且账本不变、空闲桥经 SIGTERM 退出后重新启动时自动收口且账本不变（未覆盖在途任务、SIGKILL 或断电）；独立负面测试 App（普通 UID）连 3096 被拒、取 token 得 404、四个受保护广播均被系统以缺 `INJECT_EVENTS` 拒收。自行安装的设备需要同样完成切换。依据：[App 任务传输](../app/src/com/dsb/assistant/DshClient.java#L31)、[私有套接字权限](../bridge/private-listener.mjs#L5)。
+- 公开版 App 收口（A6）：只保留一个以真实类名注册的无障碍服务；不自更新、不代点安装/允许/授权按钮、不自动写回无障碍开关；开机广播接收器不导出且先校验 action；发布构建不开 WebView 调试口；logcat 不记网址和任务/屏幕/通知原文（面板与本地文件里仍可能有原文）
+
+## 明确不防的（残余风险）
+
+| 风险 | 为什么不防 / 现状 |
+|---|---|
+| **大脑被攻破后绕过闸门** | 大脑、闸门、凭据同在一个 Linux 用户下，文件权限和提示词都不是强制隔离。要防这一条，最终授权得挪到大脑改不了的地方（例如 App 侧），在路线图上 |
+| OCR 漏读、纯图标的危险按钮 | 空树页依赖 OCR / 视觉，均可能误判；成功返回 `unclear` 会拒绝，视觉服务异常时仍有 OCR 回退放行分支（见 [G2b](../agent/safe_tap.py#L1514)） |
+| 很高的危险按钮上下边缘 | 横带只覆盖文字行上下 40–70px，边缘点按只靠视觉 |
+| 已授权的 ADB 无线调试（5555） | 同一 WiFi 下任何人都能发起连接请求；**不要在手机上点陌生的「允许 USB 调试」** |
+| 页面文字诱导（prompt injection） | 大脑可能被页面内容误导；闸门约束执行，不阻止诱导本身，也不能保证所有不可逆动作都被识别和拦下（[视觉误判 / 回退边界](../agent/safe_tap.py#L1514)，以及同用户绕过风险） |
+| 第三方 App 的风控 | 自动化访问可能被平台识别和限制，后果自负 |
+
+## 给用户的规矩
+
+1. 不要给陌生设备授权 USB/无线调试。
+2. 不要把闸门调成 `warn`/`off` 模式（配置里可以，但那就不是逗沙包了）。
+3. 遇到登录页、验证码、支付确认，应停止并人工接管；不要把“它会自动停”当作绝对保证，**不要**为了「跑通」去帮它绕过闸门。
+4. 审计日志（`agent/safe_tap_audit.jsonl`）是你的，定期看一眼它拒绝了什么。
+
+---
+
+*English summary:* Gates G1–G5 and R3 constrain screen actions; they are not a safety guarantee or strong isolation from a compromised brain sharing the same Linux user. On empty-tree pages, unavailable OCR refuses; uncertain successful vision verdicts refuse, but unavailable vision can fall back to OCR-only approval when OCR found no dangerous words and other conditions pass ([implementation](../agent/safe_tap.py#L1470)).
+
+Only gate vision checks and localization are crop-only ([gate crops](../agent/vision_check.py#L36), [localization](../agent/vision_check.py#L114)). "Ask DSH" provides full frames, tree text and notifications; API mode uploads the full frame, and dsh is instructed to `read_image` it ([question path](../bridge/bridge.mjs#L523), [upload](../bridge/bridge.mjs#L144)). dsh's image transport is outside this repo, so crop-only transmission is not assured. Configured TypeSafe review sends suspicious command excerpts and context to its cloud service, and fails open when unavailable ([hook](../agent/check_gate.py#L151)). Clipboard-write receipts exclude clipboard plaintext, but local screenshots and unredacted audit free-text fields can retain private content ([audit writer](../agent/safe_tap.py#L349)).
+
+Control-plane status: permission-gated `CmdReceiver`; the candidate installer uses a private ADB bootstrap from first pairing and attempts private transport hardening by default. Preflight skips and successful rollback explicitly warn that ordinary TCP is a weaker fallback. On 2026-10-23, the maintainer's device migrated to the installer's private transport layout and passed acceptance including one reboot: only one managed server started after reboot, identity was automatically reverified and bound, and doctor, the background virtual display and real tasks passed. Package-upgrade acceptance has not been performed. Legacy deployments are still not migrated by the public tool; the maintainer's device and limited emulator results do not prove every installation or upgrade is accepted. `RUN_COMMAND` tasks use a private socket; the public App has no self-update or auto-grant clicks, non-exported boot handling, release WebView debugging disabled and redacted logcat. Same-UID compromise, OCR/vision misses and fallback approval, authorized root/ADB/Termux actors, prompt injection and platform anti-automation remain outside this boundary. Further trust hardening is [planned](ROADMAP.md#可信加固兑现更强承诺).

@@ -1,0 +1,12 @@
+# Ubuntu 没有桌面 Documents/xdg-user-dir；让官方 first-use 初始化自动创建工作区。
+- id: workspace-controller
+  config:
+    documentsDirectory: /root/dsb-workspaces
+# 与公开 web profile 同步产品界面；不引入需要另一把 Key 的实验 MCP。
+- id: ui-brand-official
+  disabled: true
+- id: ui-message-feedback
+  disabled: true
+- id: ui-settings-account
+  config:
+    contactFormUrl: https://github.com/tianye1999/dsb/issues

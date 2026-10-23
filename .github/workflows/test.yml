@@ -1,0 +1,84 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  agent:
+    name: agent offline tests (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install --require-hashes --only-binary=:all: -r installer/requirements.txt
+      - run: python3 -S dsh-config/test_privacy_defaults.py
+      - name: run every offline suite (device access is stubbed in tests)
+        working-directory: agent
+        run: |
+          set -u; fail=0
+          for t in test_*.py tests/test_*.py safe_tap_vd_test.py; do
+            [ -f "$t" ] || continue
+            if python3 "$t" > "/tmp/$(basename "$t").log" 2>&1; then echo "OK   $t"; else echo "FAIL $t"; tail -20 "/tmp/$(basename "$t").log"; fail=1; fi
+          done
+          exit $fail
+      - name: installer and private ADB offline tests
+        run: |
+          python3 -m unittest discover -s installer/tests
+          python3 -m unittest discover -s hardening/adb-private/tests
+
+  bridge:
+    name: bridge tests (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - working-directory: bridge
+        run: node --test test-*.mjs
+      - name: public App lockdown checks (A6)
+        run: node --test app/tests/run-public-release-tests.mjs
+      - name: WebView recovery and UI patch regression checks
+        run: |
+          node app/tests/run-webview-recovery-tests.mjs
+          python3 dsh-web-tweaks/test_tweaks.py
+          node --test dsh-web-tweaks/ui-contract.test.mjs
+          python3 termux/test-dsh-up.py
+      - name: permission-gated accessibility recovery checks
+        run: node app/tests/run-accessibility-recovery-tests.mjs
+      - name: bounded trusted transport and App-private spool checks
+        run: |
+          python3 termux/test-trusted-entry.py
+          node app/tests/run-trusted-files-tests.mjs
+      - name: DSH version and route authentication contract
+        run: |
+          version=$(node -p 'JSON.parse(require("fs").readFileSync("installer/release.json")).dsh_version')
+          test "$(node -p 'require("./installer/dsh/package.json").dependencies["@deepseek-ai/dsh"]')" = "$version"
+          npm ci --prefix installer/dsh --ignore-scripts --no-audit --no-fund
+          DSB_DSH_TEST_ROOT="$GITHUB_WORKSPACE/installer/dsh" python3 -m unittest discover -s installer/tests -p test_profiles.py
+          DSB_DSH_TEST_ROOT="$GITHUB_WORKSPACE/installer/dsh" node --test installer/tests/dsh-routing.mjs
+          DSH_TEST_MODULES="$GITHUB_WORKSPACE/installer/dsh/node_modules" node --test dsh-web-tweaks/recap/route-security.test.mjs
+
+  shell-and-manifest:
+    name: shell syntax + Android manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          set -euo pipefail
+          while IFS= read -r -d '' f; do bash -n "$f"; done < <(git ls-files -z -- '*.sh')
+          python3 -c "import xml.dom.minidom as m; m.parse('app/AndroidManifest.xml')"

@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.dsb.assistant.stoptests">
+    <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="34" />
+    <application android:label="DSB Stop Tests" android:testOnly="true" />
+    <instrumentation android:name="com.dsb.assistant.stoptests.StopInstrumentation"
+        android:targetPackage="com.dsb.assistant" android:functionalTest="true" />
+    <instrumentation android:name="com.dsb.assistant.stoptests.RecoveryInstrumentation"
+        android:targetPackage="com.dsb.assistant" android:functionalTest="true" />
+</manifest>

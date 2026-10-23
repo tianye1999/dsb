@@ -1,0 +1,8 @@
+{
+  "state": "transport-applied-not-owner-accepted",
+  "created": 0,
+  "events": [{"state": "transport-applied-not-owner-accepted", "time": 0}],
+  "baseline": {"packages": {"termux": "android-tools\tlegacy", "ubuntu": "adb\tlegacy"}},
+  "files": {},
+  "diversions": [{"side": "termux", "path": "/data/data/com.termux/files/usr/bin/adb", "destination": "/data/data/com.termux/files/usr/bin/adb.r60-vendor"}]
+}

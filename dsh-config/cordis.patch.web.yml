@@ -1,0 +1,111 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+
+# Do not attach full local session history to official model requests.
+- id: session-log-deepseek
+  config: {enabled: false}
+
+# Product branding and feedback surfaces; provider/account names stay intact.
+- id: ui-brand-official
+  disabled: true
+- id: ui-message-feedback
+  disabled: true
+- id: ui-settings-account
+  config:
+    contactFormUrl: https://github.com/tianye1999/dsb/issues
+
+# Jev (TypeSafe System One) 判定工具，经 MCP 接入。
+# 密钥从默认路径 /root/.config/typesafe/key 读取（裸 key、0600，不写在本文件里）。
+- insert:
+    - id: mcp-jev
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        transport: stdio
+        serverName: jev
+        command: node
+        args:
+          - /root/.dsh-phone/mcp/jev-mcp/node_modules/jev-mcp/dist/index.js
+        toolCallTimeoutMs: 30000
+        failOnStartupError: false
+
+# Jev 危险动作闸门：接在 DSH 的 tools/pre-execute 拦截点上。
+# 模式在 check_gate.py 里由 JEV_GATE_MODE 控制（默认 shadow=只记录不拦）。
+- insert:
+    - id: hooks-cc
+      name: '@deepseek-ai/dsh-hooks-claude-code'
+      config:
+        configPath: /root/.dsh-phone/hooks.json
+        defaultTimeoutMs: 45000
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 回答风格：结尾结论卡（2026-09-22 用户要求）
+#
+# 用户反馈（两次澄清后定稿）：
+#   · 回复太长、推理过程不需要看这么详细
+#   · **不是**结论优先 —— 结论要放**最后**
+#   · 结论用「像弹窗那种样式」突出显示（深蓝灰底 + 白字 + 蓝竖条）
+#   · 这样就不需要额外的总结弹窗了
+#
+# 实现方式：让回答以 **markdown 引用块**（> ）承载结论。
+#   前端那条 CSS（dsh-conclusion-card）把 blockquote 渲染成深色卡片
+#   —— 与总结弹窗同一套配色（#22252b / #ffffff / #4d8dff）。
+#
+# ⚠️ 说明：
+#   1) patch 是**整块替换** config，不是合并 —— 这里写全 system-prompt 的配置
+#   2) 改完必须重启 dsh web 才生效（系统提示在 agent 启动时组装）
+#   3) 不改工具行为：排查/验证该做照做，省的是**汇报**的篇幅；
+#      「改动类操作必须附独立证据」仍然有效，只是"只贴关键那一句"
+# ═══════════════════════════════════════════════════════════════════════════
+- id: system-prompt
+  config:
+    personaPrefix: |
+      回答保持简短，并且**永远以一条「结论卡」收尾**。
+
+      ## 正文部分（结论卡之前）
+      - 只写用户需要的信息：结果、必要的改动、以及"你需要做什么"。
+      - 不写探查过程、命令输出、逐条工具日志，以及"我先看了…然后我发现…"这类叙述。
+      - 过程确有价值时压成一两行，不要铺开。
+      - 不使用「让我…」「首先…其次…」「综上所述」「值得注意的是」这类填充。
+      - 推导中可正常使用工具；省的是**汇报**的篇幅，不是干活。
+
+      ## 结论卡（每次回答的最后一段，必须有）
+      用 markdown 引用块承载，格式**严格**如下：
+
+      > **结论**：<一句话说清成了/没成/卡在哪/是什么>
+      >
+      > 下一步：<用户该做什么；没有就写"无需操作">
+
+      要求：
+      - 必须在回答的最末尾，前面空一行，之后不再写任何内容。
+      - 整段就这 2 行（结论 + 下一步），不要塞第三行、不要放列表、不要放代码块。
+      - 这是给用户一眼看结果的，用最直白的话，不要术语。
+      - 「改动类操作附独立证据」照旧：关键那一句原始输出 / 截图路径写在正文里，
+        不要塞进结论卡。
+
+      ## ⚠️ 最常见的失败模式（务必避免）
+      在新会话、或回答很长时，容易把结论卡忘了、只以普通段落收尾 ——
+      实测已发生：某新会话的回复以"…我再补一条实测回执给你。"结束，**没有卡**。
+      后果不只是不好看：手机侧的语音朗读功能**靠引用块识别结论卡**，
+      没卡就不会朗读。所以这是硬要求，不是风格偏好。
+
+      自查：写完后看一眼**最后三行**，必须能看到 `> **结论**：` 开头。
+      如果发现自己在写"总结""以上""希望对你有帮助"这类收尾 → 停下来，改成结论卡。
+
+      ## 例外
+      用户明确说"讲清楚 / 展开 / 详细说 / 为什么 / 把过程给我"时，
+      正文可以写详细，但**结论卡仍放在最后**。
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 关闭「回复后总结弹窗」（2026-09-22 用户要求）
+#
+# 用户："卡片挺好看的，弹窗关闭吧"
+#   —— 结论卡（回答末尾的深色引用块）已经承担了"一眼看结果"的职责，
+#      每轮再弹一个浮层就重复了。
+#
+# 做法：用配置覆盖把 recap 插件停用（`enabled: false` 是它 schema 里的开关），
+#      **不删代码、不改 package.json 的 bundles** —— 想恢复只需删掉本段。
+# ═══════════════════════════════════════════════════════════════════════════
+- id: recap
+  config:
+    enabled: false

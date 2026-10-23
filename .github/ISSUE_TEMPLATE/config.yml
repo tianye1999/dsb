@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞 / Security vulnerability
+    url: https://github.com/tianye1999/dsb/security/advisories/new
+    about: 控制面绕过、闸门绕过、隐私泄露请走私密报告，不要开公开 issue
+  - name: 安装求助 / Install help
+    url: https://github.com/tianye1999/dsb/blob/main/docs/INSTALL.md
+    about: 先对照安装指南；仍不行再开 Bug 报告并附 doctor 输出

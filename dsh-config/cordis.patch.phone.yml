@@ -1,0 +1,26 @@
+# phone profile patch layer
+- id: session-log-deepseek
+  config: {enabled: false}
+
+# Jev (TypeSafe System One) 判定工具，经 MCP 接入；与 web profile 同构。
+# 密钥从默认路径 /root/.config/typesafe/key 读取（裸 key、0600，不写在本文件里）。
+- insert:
+    - id: mcp-jev
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        transport: stdio
+        serverName: jev
+        command: node
+        args:
+          - /root/.dsh-phone/mcp/jev-mcp/node_modules/jev-mcp/dist/index.js
+        toolCallTimeoutMs: 30000
+        failOnStartupError: false
+
+# Jev 危险动作闸门：接在 DSH 的 tools/pre-execute 拦截点上。
+# 模式在 check_gate.py 里由 JEV_GATE_MODE 控制（默认 shadow=只记录不拦）。
+- insert:
+    - id: hooks-cc
+      name: '@deepseek-ai/dsh-hooks-claude-code'
+      config:
+        configPath: /root/.dsh-phone/hooks.json
+        defaultTimeoutMs: 45000

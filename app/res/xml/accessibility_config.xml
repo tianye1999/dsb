@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 2026-09-22 加 flagIncludeNotImportantViews：参考 jev-chat-jarvis
+     （它的伪装服务用 flagReportViewIds + flagIncludeNotImportantViews 读到微信气泡）。
+     微信可能把气泡节点标为「不重要」，不加这个标志会被系统过滤掉。 -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagReportViewIds|flagIncludeNotImportantViews"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
+    android:notificationTimeout="100"
+    android:description="@string/acc_desc" />

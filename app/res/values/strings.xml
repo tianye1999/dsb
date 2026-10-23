@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">逗沙包</string>
+    <string name="acc_desc">逗沙包：手机里的 dsh 客户端。读取当前屏幕内容、派发点击/滑动/输入，用来按你的指令操作手机。</string>
+</resources>

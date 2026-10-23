@@ -1,0 +1,36 @@
+name: 功能建议 / Feature request
+description: 想让逗沙包多做一件杂务，或改进体验
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先看一眼 [路线图](../blob/main/docs/ROADMAP.md)，也许已经在计划里。
+        提醒：涉及**放宽安全闸门**的建议，需要说明真实场景；我们不接受「加个关键词/黑名单」式的修法（见 CONTRIBUTING）。
+  - type: textarea
+    id: task
+    attributes:
+      label: 你想交给它的杂务 / The chore you want to hand over
+      description: 用一句你会对它说的话描述，例如「看看快递到哪了」
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: 为什么现在做不到 / Why it can't today
+      description: 是闸门拦了、它看不懂页面、还是根本没有这个能力？
+  - type: dropdown
+    id: decision
+    attributes:
+      label: 这件事里有没有需要「人来决定」的环节？
+      description: 付款、发送、删除、授权等不可逆动作逗沙包不会替你做
+      options:
+        - 没有，全程只读
+        - 有，但可以停在那一步交给我
+        - 有，而且我希望它自动做（请在下面说明为什么可以接受）
+    validations:
+      required: true
+  - type: textarea
+    id: more
+    attributes:
+      label: 其它 / Anything else

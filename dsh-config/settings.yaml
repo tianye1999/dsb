@@ -1,0 +1,12 @@
+ui-onboarding:
+  welcomeNoticeVersion: 2026-08-13.1
+agent-default-model:
+  provider: deepseek-official
+  model: deepseek-flash
+  reasoningEffort: max
+ui-conversation:
+  busyEnter: steer
+# 2026-09-23 用户要求：新会话默认就是「完全权限」（不用每次再选）
+# 命名空间 permission → defaultPreset，由 @deepseek-ai/dsh-permission-presets 注册
+permission:
+  defaultPreset: danger-full-access

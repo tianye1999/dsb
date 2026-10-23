@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 与前景图边缘同色的纯色底：前景是铺满画布的「逗沙包」插画，底色只在启动器动效露边时可见 -->
+<color xmlns:android="http://schemas.android.com/apk/res/android" android:color="#FF05152D" />

@@ -1,0 +1,7 @@
+{
+  "backend": "/data/data/com.termux/files/usr/var/lib/dsb-adb/adb.backend",
+  "socket": "/data/data/com.termux/files/usr/var/run/dsb-adb/server.sock",
+  "files": {},
+  "modes": {},
+  "packages_at_install": {"termux": "android-tools\tlegacy", "ubuntu": "adb\tlegacy"}
+}

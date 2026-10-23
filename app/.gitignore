@@ -1,0 +1,15 @@
+# 构建产物（可由源码 + build-phone.sh 重建，不入库）
+build/
+*.apk
+*.apk.idsig
+build.log
+
+# 临时备份（改代码时手工留的 .bak-*）
+*.bak-*
+*.orig
+
+# 签名密钥库绝不入库：另行备份，构建时口令经 DSB_KEY_PASS 传入
+dsb.keystore
+*.keystore
+*.jks
+.backups/
