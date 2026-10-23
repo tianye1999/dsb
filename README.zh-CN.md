@@ -81,10 +81,10 @@
 设备标识、连接目标与固定端口是否需要调整，见[设备相关数值](docs/INSTALL.md#设备相关数值哪些需要调整)。
 
 ```bash
-curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.0/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' 'c140d4c71a0afbb1d9b24ca81eb43dba870bc99cdc3765fc990f24abe2d1af56' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
+curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.1/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' '75eefd896640eb6d59ee2481deeab2f657423f2ef3dbc9a39d0e53fd5ad2b23e' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
 ```
 
-下载命令内联了发布包的 SHA-256（与 [v1.0.0 Release](https://github.com/tianye1999/dsb/releases/tag/v1.0.0) 附带的 `SHA256SUMS` 一致），校验不通过就不会解包执行。APK 用维护者现有发布密钥签名，安装器按固定的证书 SHA-256 验签后才接受。「装一个 App 就够」的全合一 APK 仍在[路线图](docs/ROADMAP.md)上。
+下载命令内联了发布包的 SHA-256（与 [v1.0.1 Release](https://github.com/tianye1999/dsb/releases/tag/v1.0.1) 附带的 `SHA256SUMS` 一致），校验不通过就不会解包执行。APK 用维护者现有发布密钥签名，安装器按固定的证书 SHA-256 验签后才接受。「装一个 App 就够」的全合一 APK 仍在[路线图](docs/ROADMAP.md)上。
 
 ## 路线图（计划中，未实现）
 
