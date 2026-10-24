@@ -69,7 +69,8 @@ public final class TermuxRunner {
         long until = android.os.SystemClock.elapsedRealtime() + timeoutMs;
         try {
             org.json.JSONObject meta = new org.json.JSONObject().put("request_id", id).put("nonce", nonce)
-                .put("size", payload.length).put("sha256", TrustedFiles.sha256(payload)).put("timeout_ms", timeoutMs);
+                .put("size", payload.length).put("sha256", TrustedFiles.sha256(payload)).put("timeout_ms", timeoutMs)
+                .put("route", route);
             Intent i = new Intent(ACTION).setClassName("com.termux", SERVICE);
             i.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/python3");
             i.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[]{TERMUX_HOME + "/dsb/trusted-entry.py"});

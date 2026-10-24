@@ -161,11 +161,14 @@ def enforce(path, destination=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--verify-dump', action='store_true')
+    parser.add_argument('--require-report', action='store_true')
     parser.add_argument('source', type=Path, nargs='?')
     parser.add_argument('destination', type=Path, nargs='?')
     args = parser.parse_args()
     if args.verify_dump:
-        raise SystemExit(0 if enabled_false(sys.stdin.read()) else 1)
+        dump = sys.stdin.read()
+        report_present = re.search(r'^- id: dsb-report\s*$', dump, re.M) is not None
+        raise SystemExit(0 if enabled_false(dump) and (not args.require_report or report_present) else 1)
     if args.source is None:
         parser.error('source is required')
     enforce(args.source, args.destination)

@@ -285,6 +285,11 @@ public class StopLifecycleTest {
         java.io.File getFilesDir() { return files; }
         final TextView statusView = new TextView();
         final Button stopButton = new Button();
+        Object reportReference;
+        String reportSummaryText = "";
+        boolean reportPending, reportDetailLoaded, reportDetailLoading;
+        View reportBox;
+        void showReport(long gen, Object summary, Object reference) {}
         final int MAX_STEPS = 1;
         void log(String s) { logs.add(s); }
         void toast(String s) {}
@@ -316,6 +321,7 @@ public class StopLifecycleTest {
     }
     static class Looper { static Object getMainLooper() { return null; } static Object myLooper() { return null; } }
     static class TextView { void setText(String s) {} }
+    static class View { static final int GONE = 8; void setVisibility(int state) {} }
     static class Button { void setText(String s) {} void setEnabled(boolean b) {} }
     static class Bitmap {}
     static class TermuxRunner { static void boot(Object o) {} }
@@ -356,7 +362,7 @@ public class StopLifecycleTest {
             lastAskId=""; askCalls.set(0);
             release=new CountDownLatch(1); cancelRelease=new CountDownLatch(1);
             replyText="done"; action=new JSONObject().put("action", "done"); }
-        static class Result { boolean ok=true; String text="done", error="test-failure", failureKind="rejected"; int statusCode=200; JSONObject action; }
+        static class Result { boolean ok=true; String text="done", error="test-failure", failureKind="rejected"; int statusCode=200; JSONObject action; Object reportSummary, reportReference; }
         static Result post(OverlayService context, String base, String path, JSONObject body, int ms) {
             Result r = new Result();
             if (path.equals("/do")) { lastDoId=body.optString("task_id", ""); doCalls.incrementAndGet(); if(holdDo) await(release); r.ok=!failDo; r.text=replyText; }

@@ -23,12 +23,18 @@
                          "permissionDecisionReason":"..."}}
 """
 import json, os, re, sys, datetime
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import jev_client
+try:
+    import task_context
+except ImportError:
+    task_context = None
 
 MODE = os.environ.get("JEV_GATE_MODE", "shadow").strip().lower()
 LOG = os.environ.get("JEV_GATE_LOG", "/root/.dsh-phone/jev-gate.log")
+AUDIT = os.environ.get("DSB_AUDIT_FILE", os.path.join(os.path.dirname(__file__), "safe_tap_audit.jsonl"))
 
 # ---- 明显只读 / 低风险：直接放行，不问模型 ----
 READ_ONLY_PATTERNS = [
@@ -82,6 +88,29 @@ def log(entry):
         with open(LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except OSError:
+        pass
+
+
+def report_event(decision, category=None, would_decision=None, warning=None):
+    """Append only fixed, non-command fields; failure cannot change hook policy."""
+    try:
+        allowed_categories = {"privacy", "read_only", "ui_interaction", "app_launch",
+                              "destructive", "system_change", "data_exfiltration"}
+        row = {"kind": "command_gate", "ts": time.time(),
+               "mode": "enforce" if MODE == "enforce" else "shadow",
+               "decision": decision,
+               "category": category if isinstance(category, str) and category in allowed_categories else None,
+               **(task_context.audit_fields() if task_context is not None else {})}
+        if would_decision in ("ask", "deny"):
+            row["would_decision"] = would_decision
+        if warning == "typesafe_unavailable":
+            row["warning"] = warning
+        fd = os.open(AUDIT, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(fd, (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8"))
+        finally:
+            os.close(fd)
+    except Exception:
         pass
 
 
@@ -140,9 +169,11 @@ def main():
             if re.search(p, cmd):
                 log({"ts": datetime.datetime.now().isoformat(timespec="seconds"),
                      "mode": MODE, "decision": "allow", "by": "whitelist", "cmd": cmd[:300]})
+                report_event("allow")
                 emit("allow", "只读/低风险命令，白名单放行")
         log({"ts": datetime.datetime.now().isoformat(timespec="seconds"),
              "mode": MODE, "decision": "allow", "by": "no-hint", "cmd": cmd[:300]})
+        report_event("allow")
         emit("allow", "未命中可疑特征")
 
     # ---- 送 Jev 判定（一次请求问两个维度，避免两次往返）----
@@ -162,6 +193,7 @@ def main():
     if packed is None:
         entry.update({"decision": "allow", "by": "jev-unavailable(fail-open)"})
         log(entry)
+        report_event("allow", warning="typesafe_unavailable")
         emit("allow", "Jev 不可用，按 fail-open 放行（请自行确认命令安全性）")
 
     ans = packed.get("answers") or {}
@@ -178,6 +210,7 @@ def main():
     if not danger_kind and not leak_hit:
         entry.update({"decision": "allow", "by": "jev"})
         log(entry)
+        report_event("allow", cat)
         emit("allow", "Jev 判定为 %s（置信度 %s，泄露概率 %s）" % (cat, conf, leak))
 
     if leak_hit and not danger_kind:
@@ -187,7 +220,9 @@ def main():
         entry.update({"decision": "ask", "reason": reason})
         log(entry)
         if MODE == "enforce":
+            report_event("ask", "privacy")
             emit("ask", reason)
+        report_event("allow", "privacy", would_decision="ask")
         print("[jev-gate][shadow] 本应 ask：%s" % reason, file=sys.stderr)
         emit("allow", "shadow 模式仅记录（本应 ask：%s）" % reason)
 
@@ -211,7 +246,9 @@ def main():
     entry.update({"decision": decision, "reason": reason})
     log(entry)
     if MODE == "enforce" and decision in ("deny", "ask"):
+        report_event(decision, cat)
         emit(decision, reason)
+    report_event("allow", cat, would_decision=decision if decision in ("deny", "ask") else None)
     # shadow 模式：记录 + stderr 提示，但放行
     print("[jev-gate][shadow] 本应 %s：%s" % (decision, reason), file=sys.stderr)
     emit("allow", "shadow 模式仅记录（本应 %s：%s）" % (decision, reason))

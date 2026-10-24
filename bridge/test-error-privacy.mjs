@@ -19,6 +19,7 @@ test('unexpected request errors return a stable code, not exception details', as
   }));
   const child = spawn(process.execPath, [new URL('./bridge.mjs', import.meta.url).pathname], {
     env: { PATH: process.env.PATH, HOME: dir, BRIDGE_SOCKET: socket, BRIDGE_DIR: path.join(dir, 'shots'),
+      BRIDGE_AUDIT_PATH: path.join(dir, 'audit.jsonl'),
       BRIDGE_DSH: path.join(dir, 'DO_NOT_LOG_TASK-executable') },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

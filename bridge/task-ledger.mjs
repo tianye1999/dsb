@@ -88,6 +88,13 @@ export class TaskLedger {
       active: id, latest: id, runtimeOpen: true });
   }
 
+  rollbackAdmission(id, previous) {
+    this.assertAvailable();
+    if (this.state.active !== id || this.state.tasks[id] !== 'running' ||
+        Object.hasOwn(previous.tasks, id)) throw new Error('task_mismatch');
+    this.persist(previous);
+  }
+
   reply(id) {
     this.assertAvailable();
     if (id !== this.state.active) throw new Error('task_mismatch');

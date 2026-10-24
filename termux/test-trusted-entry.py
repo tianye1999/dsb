@@ -28,8 +28,13 @@ def request_bytes(size):
 
 
 def metadata(data):
+    try:
+        route = json.loads(data).get('path', '/ask')
+    except (ValueError, AttributeError):
+        route = '/ask'
     return {'request_id': '12345678-1234-1234-1234-123456789abc', 'nonce': 'a' * 64,
-            'size': len(data), 'sha256': hashlib.sha256(data).hexdigest(), 'timeout_ms': 30000}
+            'size': len(data), 'sha256': hashlib.sha256(data).hexdigest(), 'timeout_ms': 30000,
+            'route': route}
 
 
 class SpoolBroadcast:
@@ -64,11 +69,54 @@ class Routes(unittest.TestCase):
     def test_only_used_task_routes_remain(self):
         for filename in ['termux/trusted-entry.py', 'app/termux/trusted-entry.py']:
             entry = load_entry(filename)
-            self.assertEqual(entry.ROUTES, {'/do', '/ask', '/step', '/cancel', '/health', '/dsh-url'})
+            self.assertEqual(entry.ROUTES, {'/do', '/ask', '/step', '/cancel', '/health', '/dsh-url', '/report'})
             for route in ['/recap.inject', '/recap.generate', '/inject', '/generate']:
                 with self.assertRaises(ValueError):
                     entry.validate_request({'path': route, 'body': {}})
             self.assertEqual(entry.validate_request({'path': '/health', 'body': {}})['path'], '/health')
+
+    def test_report_is_read_only_and_token_bound(self):
+        for filename in ['termux/trusted-entry.py', 'app/termux/trusted-entry.py']:
+            entry = load_entry(filename)
+            body = {'task_id': '11111111-1111-4111-8111-111111111111', 'report_token': 'a' * 64}
+            self.assertEqual(entry.validate_request({'path': '/report', 'body': body})['body'], body)
+            self.assertEqual(entry.validate_request({'path': '/report', 'body': dict(body, format='markdown')})['path'], '/report')
+            for invalid in [{}, {'task_id': body['task_id']}, dict(body, task_id='bad'),
+                            dict(body, report_token='secret'), dict(body, format='write'),
+                            dict(body, command='cat /private/data')]:
+                with self.subTest(filename=filename, invalid=invalid), self.assertRaises(ValueError):
+                    entry.validate_request({'path': '/report', 'body': invalid})
+            with self.assertRaises(ValueError):
+                entry.validate_request({'path': '/report', 'body': body, 'command': 'ignored'})
+            with self.assertRaises(ValueError):
+                entry.validate_request({'path': '/report', 'body': dict(body, padding='x' * 9000)})
+
+    def test_report_size_hint_and_actual_route_must_agree(self):
+        entry = load_entry()
+        report = {'path': '/report', 'body': {'task_id': '11111111-1111-4111-8111-111111111111',
+                                             'report_token': 'a' * 64}}
+        data = json.dumps(report).encode()
+        self.assertEqual(entry.validate_meta(dict(metadata(data), route='/report'))['route'], '/report')
+        with self.assertRaises(ValueError):
+            entry.validate_meta(dict(metadata(data), route='/report', size=8193))
+        with self.assertRaises(ValueError):
+            entry.validate_meta(dict(metadata(data), route=None, size=8193))
+        broadcast = SpoolBroadcast(data)
+        with patch.object(entry, 'broadcast', broadcast), \
+                patch.object(entry.sys, 'stdin', io.StringIO(json.dumps(
+                    dict(metadata(data), route='/report', size=8193)))), \
+                self.assertRaisesRegex(ValueError, 'report_request_size'):
+            entry.main()
+        self.assertEqual(broadcast.calls, [])
+        with self.assertRaises(ValueError):
+            entry.validate_meta(dict(metadata(data), route='/not-allowed'))
+        oversized = json.dumps({'path': '/report', 'body': dict(report['body'],
+                               format='json' + ' ' * 9000)}).encode()
+        with self.assertRaises(ValueError):
+            entry.validate_request(json.loads(oversized))
+        broadcast = SpoolBroadcast(data)
+        with patch.object(entry, 'broadcast', broadcast), self.assertRaisesRegex(ValueError, 'route_mismatch'):
+            entry.read_request(dict(metadata(data), route='/ask'), 1e30)
 
     def test_packaged_receiver_is_identical(self):
         self.assertEqual((ROOT / 'termux/trusted-entry.py').read_bytes(),

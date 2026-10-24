@@ -38,11 +38,22 @@ for profile in web phone headless; do
   backups+=("$backup")
   [ -f "$target" ] || cp "$HERE/cordis.patch.$profile.yml" "$target"
   python3 "$HERE/privacy_defaults.py" "$target"
+  verify_args=(--verify-dump)
+  if [ "$profile" = web ] && [ -L "$ROOT/web/node_modules/dsb-report" ]; then
+    verify_args+=(--require-report)
+  fi
   if ! dsh --profile "$profile" --dump-config 2>/dev/null |
-      python3 "$HERE/privacy_defaults.py" --verify-dump; then
+      python3 "$HERE/privacy_defaults.py" "${verify_args[@]}"; then
     printf 'privacy readback failed: %s\n' "$profile" >&2
     exit 1
   fi
   printf 'privacy default verified: %s enabled=false\n' "$profile"
+  if [ "$profile" = web ] && [ -L "$ROOT/web/node_modules/dsb-report" ]; then
+    node --input-type=module -e 'await import(process.argv[1])' \
+      "$ROOT/web/node_modules/dsb-report/index.js" || {
+        echo 'dsb-report import failed' >&2
+        exit 1
+      }
+  fi
 done
 committed=true

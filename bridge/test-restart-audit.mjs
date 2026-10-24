@@ -63,6 +63,7 @@ test('restarted bridge must not confirm cancellation while old worker survives',
       env: { PATH: process.env.PATH, HOME: dir, BRIDGE_HOST: '127.0.0.1',
         BRIDGE_SOCKET: socketPath, BRIDGE_DSH: path.join(here, 'fake-dsh-test.mjs'),
         BRIDGE_DIR: path.join(dir, 'shots'), BRIDGE_MEM_DIR: path.join(dir, 'memory'),
+        BRIDGE_AUDIT_PATH: path.join(dir, 'audit.jsonl'),
         BRIDGE_COMPACT_EVERY: '0', TEST_EVENTS: eventsFile }, stdio: 'ignore'
     });
     bridges.push(child);

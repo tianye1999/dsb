@@ -13,6 +13,8 @@ public class DshClient {
         public String error = "";
         public String failureKind = "";
         public int statusCode;
+        ExecutionReport.Summary reportSummary;
+        ExecutionReport.Reference reportReference;
     }
 
     static String taskReceiptError(String path, JSONObject request, JSONObject response) {
@@ -54,6 +56,13 @@ public class DshClient {
                     r.error = invalid;
                     return r;
                 }
+                if (path.equals("/do")) {
+                    r.reportSummary = ExecutionReport.summary(o.optJSONObject("report_summary"));
+                    String taskId = body.optString("task_id", "");
+                    String token = o.optString("report_token", "");
+                    if (ExecutionReport.validReference(taskId, token))
+                        r.reportReference = new ExecutionReport.Reference(taskId, token);
+                }
             }
             r.text = o.optString("text", "");
             if (o.has("action") && !o.isNull("action")) r.action = o.optJSONObject("action");
@@ -69,6 +78,21 @@ public class DshClient {
                 : t instanceof java.io.IOException ? "transport" : "response";
             r.error = String.valueOf(t);
             return r;
+        }
+    }
+
+    static ExecutionReport queryReport(Context context, ExecutionReport.Reference reference) {
+        if (reference == null || !ExecutionReport.validReference(reference.taskId, reference.token)) return null;
+        try {
+            JSONObject request = new JSONObject().put("task_id", reference.taskId)
+                    .put("report_token", reference.token);
+            JSONObject envelope = TermuxRunner.request(context, "/report", request, 15000);
+            if (envelope.optInt("status", 0) != 200) return null;
+            JSONObject body = envelope.optJSONObject("body");
+            if (body == null || !Boolean.TRUE.equals(body.opt("ok"))) return null;
+            return ExecutionReport.detail(body.optJSONObject("report"), reference.taskId);
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 }

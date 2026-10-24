@@ -103,4 +103,23 @@ public final class TrustedFiles {
         }
         if(d.exists()&&!d.delete()) throw new IOException("spool_cleanup");
     }
+
+    /** Startup maintenance for app-owned expired requests; never touch live requests. */
+    public static void pruneExpired(File root) {
+        File[] entries = root.listFiles();
+        if (entries == null) return;
+        long now = System.currentTimeMillis();
+        for (File entry : entries) {
+            if (!entry.isDirectory() || !entry.getName().matches("[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")) continue;
+            try {
+                Properties p = new Properties();
+                try (FileInputStream in = new FileInputStream(new File(entry, "meta"))) { p.load(in); }
+                if (now >= Long.parseLong(p.getProperty("expires"))) cleanup(root, entry.getName());
+            } catch (Exception ignored) {
+                if (now - entry.lastModified() > 960000) {
+                    try { cleanup(root, entry.getName()); } catch (IOException ignoredAgain) { }
+                }
+            }
+        }
+    }
 }

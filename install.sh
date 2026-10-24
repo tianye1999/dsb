@@ -100,7 +100,7 @@ deploy_files() {
   [ ! -L "$HOME/.dsb-ipc" ] || fail 'IPC 目录不能是符号链接'
   chmod 700 "$HOME/.dsb-ipc"
   # 只部署代码，不把仓库里的实验状态、锁、截图或历史凭据复制给新用户。
-  cp "$SOURCE"/agent/*.py "$SOURCE/agent/SKILL.md" "$RF/root/.dsh-phone/skills/"
+  cp "$SOURCE"/agent/*.py "$SOURCE/agent/report_vocabulary.json" "$SOURCE/agent/SKILL.md" "$RF/root/.dsh-phone/skills/"
   cp "$SOURCE"/bridge/*.mjs "$RF/root/dsh-bridge/"
   for script in "$SOURCE"/termux/*.sh "$SOURCE"/termux/*.py; do
     case "$(basename "$script")" in supervisor.sh|boot.sh) continue ;; esac
@@ -115,11 +115,16 @@ deploy_files() {
   done
   cp "$SOURCE"/dsh-config/* "$RF/root/dsh-config/"
   mkdir -p "$RF/root/dsh-web-tweaks/dsb-brand"
+  mkdir -p "$RF/root/dsh-web-tweaks/dsb-report"
   cp "$SOURCE"/dsh-web-tweaks/*.py "$SOURCE"/dsh-web-tweaks/*.sh "$RF/root/dsh-web-tweaks/"
   cp "$SOURCE"/dsh-web-tweaks/dsb-brand/*.js "$SOURCE"/dsh-web-tweaks/dsb-brand/*.mjs \
     "$SOURCE"/dsh-web-tweaks/dsb-brand/package.json "$SOURCE"/dsh-web-tweaks/dsb-brand/cordis.patch.yml \
     "$RF/root/dsh-web-tweaks/dsb-brand/"
   cp "$SOURCE/app/res/mipmap-xxxhdpi/ic_launcher_foreground.png" "$RF/root/dsh-web-tweaks/dsb-brand/source-icon.png"
+  cp "$SOURCE"/dsh-web-tweaks/dsb-report/index.js "$SOURCE"/dsh-web-tweaks/dsb-report/client.js \
+    "$SOURCE"/dsh-web-tweaks/dsb-report/web-turns.mjs \
+    "$SOURCE"/dsh-web-tweaks/dsb-report/package.json "$SOURCE"/dsh-web-tweaks/dsb-report/cordis.patch.yml \
+    "$RF/root/dsh-web-tweaks/dsb-report/"
   cp "$SOURCE/installer/profiles.py" "$RF/root/.dsb-profiles.py"
   cp "$SOURCE/agent/SKILL.md" "$RF/root/.dsh/skills/dsb-phone/SKILL.md"
   cp "$SOURCE/installer/boot.sh" "$HOME/dsb/boot.sh"
@@ -148,11 +153,26 @@ deploy_files() {
 
 setup_profiles() {
   STAGE=隐私与品牌
-  in_ubuntu python3 /root/.dsb-profiles.py /root/.dsh/profiles /root/dsh-web-tweaks/dsb-brand
-  in_ubuntu node /root/dsh-web-tweaks/dsb-brand/build.mjs /root/dsh-web-tweaks/dsb-brand/source-icon.png
-  # 必须使用 main 的写入+实际 dump-config 读回流程；不调用 plugin add/pnpm。
-  in_ubuntu bash /root/dsh-config/install-profile-patches.sh
-  in_ubuntu bash /root/dsh-web-tweaks/apply-all.sh
+  in_ubuntu bash -c '. /root/dsh-config/report-paths.sh; test "$DSB_ACTIVE_TASK_FILE" = /root/.dsh-phone/active-task.json; test "$DSB_AUDIT_FILE" = /root/.dsh-phone/skills/safe_tap_audit.jsonl; test "$BRIDGE_AGENT_DIR" = /root/.dsh-phone/skills'
+  local backup_dir profile manifest
+  backup_dir=$(mktemp -d)
+  for profile in web phone headless; do
+    manifest="$RF/root/.dsh/profiles/$profile/package.json"
+    if [ -f "$manifest" ]; then cp -p "$manifest" "$backup_dir/$profile"; fi
+  done
+  if ! in_ubuntu python3 /root/.dsb-profiles.py /root/.dsh/profiles /root/dsh-web-tweaks/dsb-brand /root/dsh-web-tweaks/dsb-report ||
+     ! in_ubuntu node /root/dsh-web-tweaks/dsb-brand/build.mjs /root/dsh-web-tweaks/dsb-brand/source-icon.png ||
+     ! in_ubuntu bash /root/dsh-config/install-profile-patches.sh ||
+     ! in_ubuntu bash /root/dsh-web-tweaks/apply-all.sh; then
+    for profile in web phone headless; do
+      manifest="$RF/root/.dsh/profiles/$profile/package.json"
+      if [ -f "$backup_dir/$profile" ]; then cp -p "$backup_dir/$profile" "$manifest"
+      else rm -f -- "$manifest"; fi
+    done
+    rm -r -- "$backup_dir"
+    fail 'profile 验证失败，已恢复 package.json'
+  fi
+  rm -r -- "$backup_dir"
 }
 
 setup_ssh() {

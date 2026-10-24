@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location('profiles', Path(__file__).resolve().parents[1] / 'profiles.py')
 
@@ -53,6 +54,45 @@ class ProfilesTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'dsb-brand'):
                 module.configure(root / 'profiles', root / 'brand')
 
+    def test_web_report_is_linked_without_touching_existing_profile_modules(self):
+        module = self.load()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            brand, report = root / 'brand', root / 'report'
+            brand.mkdir()
+            report.mkdir()
+            module.configure(root / 'profiles', brand, report)
+            web = root / 'profiles/web'
+            self.assertEqual(json.loads((web / 'package.json').read_text())['dsh']['profile']['bundles'][-2:],
+                             ['dsb-brand', 'dsb-report'])
+            self.assertEqual((web / 'node_modules/dsb-report').resolve(), report.resolve())
+            module.configure(root / 'profiles', brand, report)
+
+    def test_manifest_failure_restores_prior_bytes_and_removes_new_links(self):
+        module = self.load()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            brand, report = root / 'brand', root / 'report'
+            brand.mkdir()
+            report.mkdir()
+            web = root / 'profiles/web'
+            web.mkdir(parents=True)
+            manifest = web / 'package.json'
+            original = b'{"name":"custom","dsh":{"profile":{"bundles":[]}}}\n'
+            manifest.write_bytes(original)
+            real_replace = Path.replace
+            def fail_phone(source, target):
+                self.assertTrue((web / 'node_modules/dsb-report').is_symlink())
+                if str(target).endswith('/phone/package.json'):
+                    raise OSError('synthetic manifest failure')
+                return real_replace(source, target)
+            with patch.object(Path, 'replace', fail_phone), self.assertRaisesRegex(OSError, 'synthetic'):
+                module.configure(root / 'profiles', brand, report)
+            self.assertEqual(manifest.read_bytes(), original)
+            self.assertFalse((web / 'node_modules/dsb-brand').exists())
+            self.assertFalse((web / 'node_modules/dsb-report').exists())
+            self.assertEqual(list((root / 'profiles').rglob('*.dsb-tmp')), [])
+
     @unittest.skipUnless(os.environ.get('DSB_DSH_TEST_ROOT'), 'requires the actual locked DSH installation')
     def test_main_privacy_installer_reads_back_all_three_real_profiles(self):
         module = self.load()
@@ -63,7 +103,7 @@ class ProfilesTests(unittest.TestCase):
             shutil.copytree(repo / 'dsh-web-tweaks/dsb-brand', brand, ignore=shutil.ignore_patterns('build'))
             subprocess.run(['node', str(brand / 'build.mjs'), str(repo / 'app/res/mipmap-xxxhdpi/ic_launcher_foreground.png')],
                            check=True, capture_output=True)
-            module.configure(root / '.dsh/profiles', brand)
+            module.configure(root / '.dsh/profiles', brand, repo / 'dsh-web-tweaks/dsb-report')
             for name in module.TEMPLATES:
                 shutil.copyfile(repo / 'installer/cordis.patch.yml', root / '.dsh/profiles' / name / 'cordis.patch.yml')
             env = {**os.environ, 'HOME': str(root), 'DSH_HOME': str(root / '.dsh'),

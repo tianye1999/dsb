@@ -68,6 +68,10 @@ import subprocess
 import sys
 import tempfile
 import time
+try:
+    import task_context
+except ImportError:
+    task_context = None
 
 # 2026-10-01（P0-1 像素兜底）：容器侧 OCR（RapidOCR→tesseract 双引擎，见 skills/ocr.py）。
 # 空树页（微信/淘宝系）控件树为空时：look 附带像素文本、G2 在像素文本上重建禁区、
@@ -98,7 +102,7 @@ _GATE_EVIDENCE = {}
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, "safe_tap_state.json")
-AUDIT = os.path.join(HERE, "safe_tap_audit.jsonl")
+AUDIT = os.environ.get("DSB_AUDIT_FILE", os.path.join(HERE, "safe_tap_audit.jsonl"))
 SHOTS = os.path.join(HERE, "safe_tap_shots")
 try:
     from adb_endpoint import adb_target, transport_check, adb_command, EndpointUnavailable  # noqa: F401 - Probe the full endpoint API before selecting the legacy fallback.
@@ -367,6 +371,21 @@ def save_state(s):
 
 
 def audit(rec):
+    rec = dict(rec)
+    try:
+        enriched = rec.copy()
+        if task_context is not None:
+            enriched.update(task_context.audit_fields())
+        if enriched.get("allowed") is False or (enriched.get("kind") == "open" and
+                                                enriched.get("status") in ("refused", "failed")):
+            import task_report
+            enriched.setdefault("reason_code", task_report.reason_code_for(enriched))
+        rec = enriched
+    except Exception:
+        if rec.get("kind") == "open" and rec.get("status") == "failed":
+            rec.setdefault("reason_code", "OP_FAILED")
+        elif rec.get("allowed") is False or (rec.get("kind") == "open" and rec.get("status") == "refused"):
+            rec.setdefault("reason_code", "OTHER_REFUSAL")
     rec = {**rec, "ts": time.time(), "ts_local": time.strftime("%Y-%m-%d %H:%M:%S")}
     # 2026-10-01（Tier-1①）：任务上下文由 dsb_run 用环境变量注入，子进程自然继承；
     # 无任务上下文时字段缺省——现有审计消费方（stats 漏斗）不受影响。
