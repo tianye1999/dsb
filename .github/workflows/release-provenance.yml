@@ -1,0 +1,192 @@
+name: release-provenance
+
+# Rebuild a release's installer tarball from public source, require it to be
+# byte-identical to the release asset and, on the release tag itself, attest
+# its build provenance. Release order: push the tag vX.Y.Z on the commit the
+# tarball was built from, create the draft release on that existing tag, then
+#   gh workflow run release-provenance --repo tianye1999/dsb --ref vX.Y.Z -f tag=vX.Y.Z
+# and publish the release only after the Sigstore bundle is attached.
+# With verify_only_ref set, the run only rebuilds that commit and compares; it
+# never attests, because the attestation would name the workflow's ref.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag whose dsb-installer.tar.gz is checked, for example v1.0.4"
+        required: true
+      verify_only_ref:
+        description: "Optional full commit SHA to rebuild from without attesting"
+        required: false
+        default: ""
+
+permissions: read-all
+
+jobs:
+  # Runs repository code, so it gets no token beyond read access.
+  build:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      digest: ${{ steps.rebuild.outputs.digest }}
+    env:
+      TAG: ${{ inputs.tag }}
+      SOURCE_REF: ${{ inputs.verify_only_ref }}
+    steps:
+      - name: validate inputs
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag must look like v1.2.3"; exit 1; }
+          [[ -z "$SOURCE_REF" || "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "verify_only_ref must be a full commit SHA"; exit 1; }
+          if [ -z "$SOURCE_REF" ] && [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then
+            echo "to attest, push the tag first and run this workflow on it (--ref $TAG)"; exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.verify_only_ref || github.sha }}
+          path: src
+          persist-credentials: false
+      - name: check the checked-out commit
+        run: |
+          head=$(git -C src rev-parse HEAD)
+          expected=${SOURCE_REF:-$GITHUB_SHA}
+          [ "$head" = "$expected" ] || { echo "checked out $head, expected $expected"; exit 1; }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: record the toolchain
+        run: |
+          python3 -c 'import sys, zlib; print(sys.version); print("zlib", zlib.ZLIB_VERSION, zlib.ZLIB_RUNTIME_VERSION)'
+          git --version
+      - name: download the APK the release pins
+        run: |
+          url=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["apk_url"])' src/installer/release.json)
+          [[ "$url" =~ ^https://github\.com/tianye1999/dsb/releases/download/v[0-9.]+/DSB-[0-9.]+\.apk$ ]] || { echo "unexpected apk_url: $url"; exit 1; }
+          curl -fsSL --retry 3 "$url" -o app.apk
+      - name: fetch the pinned NDK inputs for both architectures
+        run: |
+          python3 -I - src ndk-cache <<'PY'
+          """build_inputs.prepare() covers the host CPU only; the release carries both."""
+          import importlib.util
+          import platform
+          import sys
+
+          repo, cache = sys.argv[1], sys.argv[2]
+          spec = importlib.util.spec_from_file_location('build_inputs', repo + '/hardening/adb-private/build_inputs.py')
+          inputs = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(inputs)
+          for machine in inputs.PINS:
+              platform.machine = lambda m=machine: m
+              print('prepared', inputs.prepare(cache))
+          PY
+      - name: rebuild the installer tarball
+        id: rebuild
+        run: |
+          mkdir rebuilt
+          (cd src && python3 -I installer/build_release.py --apk ../app.apk --ndk-cache ../ndk-cache --output ../rebuilt/dsb-installer.tar.gz)
+          digest=$(sha256sum rebuilt/dsb-installer.tar.gz | cut -d ' ' -f 1)
+          echo "rebuilt $digest from $(git -C src rev-parse HEAD)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rebuilt-installer
+          path: rebuilt/dsb-installer.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # Reads the (possibly draft) release; runs no repository code.
+  verify:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write  # draft releases are only visible with write access
+    outputs:
+      digest: ${{ steps.compare.outputs.digest }}
+      release_id: ${{ steps.fetch.outputs.release_id }}
+      draft: ${{ steps.fetch.outputs.draft }}
+    env:
+      TAG: ${{ inputs.tag }}
+      BUILT: ${{ needs.build.outputs.digest }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rebuilt-installer
+          path: rebuilt
+      - name: fetch the release assets
+        id: fetch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\")" > release.json
+          [ "$(jq -s length release.json)" = 1 ] || { echo "expected exactly one release for $TAG"; exit 1; }
+          mkdir release
+          for name in dsb-installer.tar.gz SHA256SUMS; do
+            id=$(jq -r --arg n "$name" '.assets[] | select(.name == $n) | .id' release.json)
+            [[ "$id" =~ ^[0-9]+$ ]] || { echo "release $TAG has no single asset named $name"; exit 1; }
+            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$id" -H "Accept: application/octet-stream" > "release/$name"
+          done
+          echo "release_id=$(jq -r .id release.json)" >> "$GITHUB_OUTPUT"
+          echo "draft=$(jq -r .draft release.json)" >> "$GITHUB_OUTPUT"
+      - name: compare with the release asset
+        id: compare
+        run: |
+          grep -E '^[0-9a-f]{64}  dsb-installer\.tar\.gz$' release/SHA256SUMS > tarball.sum
+          [ "$(wc -l < tarball.sum)" = 1 ] || { echo "SHA256SUMS must list dsb-installer.tar.gz once"; exit 1; }
+          (cd release && sha256sum -c ../tarball.sum)
+          cmp rebuilt/dsb-installer.tar.gz release/dsb-installer.tar.gz
+          digest=$(sha256sum release/dsb-installer.tar.gz | cut -d ' ' -f 1)
+          [ "$digest" = "$BUILT" ] || { echo "digest changed between jobs"; exit 1; }
+          echo "byte-identical to the $TAG release asset: $digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+  # Signs only the digest the verify job confirmed; touches no files.
+  attest:
+    needs: verify
+    if: ${{ inputs.verify_only_ref == '' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write      # keyless Sigstore signing
+      attestations: write  # store the attestation in this repository
+    steps:
+      - name: attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: dsb-installer.tar.gz
+          subject-digest: sha256:${{ needs.verify.outputs.digest }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: provenance-bundle
+          path: ${{ steps.attest.outputs.bundle-path }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # Published releases are immutable, so only a draft gets the bundle attached.
+  attach:
+    needs: [verify, attest]
+    if: ${{ inputs.verify_only_ref == '' && needs.verify.outputs.draft == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write  # upload the bundle to the draft release
+    env:
+      RELEASE_ID: ${{ needs.verify.outputs.release_id }}
+      ASSET: dsb-installer.tar.gz.sigstore.json
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: provenance-bundle
+          path: bundle
+      - name: attach the Sigstore bundle to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$RELEASE_ID" =~ ^[0-9]+$ ]] || { echo "bad release id"; exit 1; }
+          files=(bundle/*)
+          [ "${#files[@]}" = 1 ] || { echo "expected one bundle file"; exit 1; }
+          old=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" --jq ".[] | select(.name == \"$ASSET\") | .id")
+          if [ -n "$old" ]; then gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$old"; fi
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" --data-binary "@${files[0]}" \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$ASSET" > /dev/null
+          echo "attached $ASSET to release $RELEASE_ID"
