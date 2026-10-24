@@ -13,7 +13,7 @@
 ## 一个任务的生命周期
 
 1. 你在 App 网页里下任务 → App 带 `task_id`（UUID）调桥接 `/do`。
-2. **桥接**（`bridge/bridge.mjs` + `task-ledger.mjs`）：账本检查 `task_id` 幂等、当前无执行中任务、运行时状态已知 → 把原话交给 dsh 运行时（`phone` 配置，挂着危险动作钩子 `agent/check_gate.py`）。
+2. **桥接**（`bridge/bridge.mjs` + `task-ledger.mjs`）：账本检查 `task_id` 幂等、当前无执行中任务、运行时状态已知 → 把原话交给 dsh 运行时（`phone` 配置；`agent/check_gate.py` 命令钩子可选，安装器新建的 profile 默认不启用）。
 3. **大脑**读 `docs/internal` 里给它的技能说明（发布版见 `agent/SKILL.md`），用 bash 调 `agent/` 里的原语：
    - `safe_tap.py open --app X --vd`：建 scrcpy 虚拟屏并在上面打开 App
    - `safe_tap.py look --display N`：拍一帧 + 控件树 + （空树时）OCR → 发一张**凭据**（shot_id）
@@ -37,7 +37,7 @@
 
 不能将整条链路描述成“所有判定 fail-closed”：空树页的 OCR 不可用时拒绝；视觉成功返回 `impact≠none`（含 `unclear`）时拒绝，但**视觉服务异常时，若 OCR 未检出危险词、调用方已确认截图且其他闸门条件满足，仍可能仅凭 OCR 放行**，记为 `ocr_clean_ack_vision_unavailable`；已检出危险词则拒绝。依据：[OCR 分支](../agent/safe_tap.py#L1477)、[视觉判断与回退](../agent/safe_tap.py#L1516)。
 
-命令层的 TypeSafe 钩子另有服务不可用时的 fail-open 分支（[代码](../agent/check_gate.py#L162)）。大脑、闸门和凭据在同一个 Termux Linux 用户下运行，闸门不能防住被攻破的大脑改写或绕过它；运行权限见[大脑进程启动](../bridge/bridge.mjs#L122)。
+命令层的 TypeSafe 钩子启用后，另有服务不可用时的 fail-open 分支（[代码](../agent/check_gate.py#L162)）。大脑、闸门和凭据在同一个 Termux Linux 用户下运行，闸门不能防住被攻破的大脑改写或绕过它；运行权限见[大脑进程启动](../bridge/bridge.mjs#L122)。
 
 ## 虚拟屏（`agent/vd_session.py`）
 
@@ -51,7 +51,7 @@
 
 - **裁剪范围是路径级约束**：闸门视觉复核只发目标附近裁剪图，视觉定位只发指定区域裁剪图（[复核](../agent/vision_check.py#L36)、[定位](../agent/vision_check.py#L114)），不是整个大脑只收裁剪图。
 - **整屏问答另有完整截图路径**：App 的「问 DSH」将整屏截图、控件树和最近通知交给 `/ask`；API 模式直接把整屏上传到默认的 DeepSeek API；dsh 模式被引导 `read_image` 完整截图。dsh 内部图片传输实现不在本仓库，不能承诺只外发裁剪图。任务和页面文本也可能进入云端模型，手机上运行 dsh 不代表离线推理。依据：[App 输入](../app/src/com/dsb/assistant/OverlayService.java#L2273)、[问答桥接](../bridge/bridge.mjs#L548)、[API 上传](../bridge/bridge.mjs#L144)、[dsh 看图入口](../bridge/bridge.mjs#L170)。
-- **可选 TypeSafe 判定**：配置 Key 后，将可疑 shell 命令片段（最多 1500 字符）、工具名称与命中特征送往 TypeSafe 云端服务；不可用时命令钩子 fail-open。依据：[判定输入](../agent/check_gate.py#L151)、[服务与密钥](../agent/jev_client.py#L23)、[不可用分支](../agent/check_gate.py#L162)。
+- **可选 TypeSafe 判定**：安装器默认不启用命令钩子。启用钩子并配置 Key 后，将可疑 shell 命令片段（最多 1500 字符）、工具名称与命中特征送往 TypeSafe 云端服务；不可用时钩子 fail-open。依据：[安装器默认补丁](../installer/cordis.patch.yml#L2)、[判定输入](../agent/check_gate.py#L151)、[服务与密钥](../agent/jev_client.py#L23)、[不可用分支](../agent/check_gate.py#L162)。
 - **截图落盘，审计未统一脱敏**：动作前后截图和问答截图保存在本机；`audit()` 直接序列化记录，`note` / `expect` / 视觉解释可能带入聊天、订单等原文，不能承诺零原文审计。屏幕动作审计也不覆盖大脑的每一条 bash 命令。依据：[动作记录与截图](../agent/safe_tap.py#L1943)、[审计写入](../agent/safe_tap.py#L369)、[问答截图落盘](../bridge/bridge.mjs#L87)。
 
 ## 中文输入（`type`）

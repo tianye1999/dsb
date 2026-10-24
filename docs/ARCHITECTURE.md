@@ -13,7 +13,7 @@
 ## Life of a task
 
 1. You submit a task in the App's web UI → the App calls the bridge's `/do` with a `task_id` (UUID).
-2. **Bridge** (`bridge/bridge.mjs` + `task-ledger.mjs`): the ledger checks that the `task_id` is idempotent, no task is running and the runtime state is known → it hands your words to the dsh runtime (the `phone` profile, with the dangerous-action hook `agent/check_gate.py` attached).
+2. **Bridge** (`bridge/bridge.mjs` + `task-ledger.mjs`): the ledger checks that the `task_id` is idempotent, no task is running and the runtime state is known → it hands your words to the dsh runtime (the `phone` profile; the `agent/check_gate.py` command hook is optional and disabled by default in installer-created profiles).
 3. The **brain** reads the skill notes written for it under `docs/internal` (the release version is `agent/SKILL.md`) and calls the primitives in `agent/` through bash:
    - `safe_tap.py open --app X --vd`: create a scrcpy virtual display and open the app on it
    - `safe_tap.py look --display N`: capture a frame + view tree + OCR (when the tree is empty) → issue a **credential** (shot_id)
@@ -37,7 +37,7 @@
 
 The chain must not be described as "every decision fails closed". On empty-tree pages, unavailable OCR refuses, and a successful vision verdict with `impact≠none` (including `unclear`) refuses. **When the vision service fails, an action can still be approved on OCR alone if OCR found no danger words, the caller confirmed the screenshot and the other gate conditions hold**; this is recorded as `ocr_clean_ack_vision_unavailable`. If OCR found danger words, the action is refused. Source: [OCR branch](../agent/safe_tap.py#L1477), [vision verdict and fallback](../agent/safe_tap.py#L1516).
 
-The command-level TypeSafe hook also has a fail-open branch when its service is unavailable ([code](../agent/check_gate.py#L162)). The brain, the gates and the credentials run as the same Termux Linux user, so the gates cannot stop a compromised brain from rewriting or bypassing them; see how the [brain process is started](../bridge/bridge.mjs#L122).
+When enabled, the command-level TypeSafe hook has a fail-open branch when its service is unavailable ([code](../agent/check_gate.py#L162)). The brain, the gates and the credentials run as the same Termux Linux user, so the gates cannot stop a compromised brain from rewriting or bypassing them; see how the [brain process is started](../bridge/bridge.mjs#L122).
 
 ## Virtual display (`agent/vd_session.py`)
 
@@ -51,7 +51,7 @@ When the view tree cannot be read, `look` runs OCR automatically to produce `pix
 
 - **Cropping is a per-path constraint**: the gate's visual recheck sends only a crop around the target, and visual localization sends only a crop of the given region ([recheck](../agent/vision_check.py#L36), [localization](../agent/vision_check.py#L114)). The brain as a whole does not receive only crops.
 - **Full-screen questions have a separate full-frame path**: the App's "Ask DSH" passes a full screenshot, the view tree and recent notifications to `/ask`; API mode uploads the full frame directly to the default DeepSeek API, and dsh mode is instructed to `read_image` the full screenshot. dsh's internal image transport is not in this repository, so we cannot promise that only crops leave the phone. Task and page text can also reach the cloud model; running dsh on the phone does not mean inference is offline. Source: [App input](../app/src/com/dsb/assistant/OverlayService.java#L2273), [question bridge](../bridge/bridge.mjs#L548), [API upload](../bridge/bridge.mjs#L144), [dsh image entry](../bridge/bridge.mjs#L170).
-- **Optional TypeSafe review**: once a key is configured, suspicious shell command excerpts (up to 1500 characters), the tool name and the matched features are sent to the TypeSafe cloud service; when it is unavailable the command hook fails open. Source: [review input](../agent/check_gate.py#L151), [service and key](../agent/jev_client.py#L23), [unavailable branch](../agent/check_gate.py#L162).
+- **Optional TypeSafe review**: the installer does not enable the command hook by default. When the hook is enabled and a key is configured, suspicious shell command excerpts (up to 1500 characters), the tool name and the matched features are sent to the TypeSafe cloud service; when it is unavailable the hook fails open. Source: [default installer patch](../installer/cordis.patch.yml#L2), [review input](../agent/check_gate.py#L151), [service and key](../agent/jev_client.py#L23), [unavailable branch](../agent/check_gate.py#L162).
 - **Screenshots are stored and audit records are not uniformly redacted**: before/after screenshots and question screenshots stay on the phone; `audit()` serializes records directly, and `note` / `expect` / vision explanations can carry chat or order text, so we do not promise plaintext-free audits. The screen-action audit also does not cover every bash command the brain runs. Source: [action records and screenshots](../agent/safe_tap.py#L1943), [audit writer](../agent/safe_tap.py#L369), [question screenshots on disk](../bridge/bridge.mjs#L87).
 
 ## Chinese text input (`type`)

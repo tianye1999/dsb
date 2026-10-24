@@ -118,6 +118,27 @@ class RecoveryResult(unittest.TestCase):
                 result = r.recover(situation, {"dialogs": [{"buttons": ["关闭"]}]})
                 self.assertEqual(result["rc"], 2)
                 self.assertEqual(result["outcome"], "refused")
+                self.assertEqual(result["action"], "stop_for_human")
+                self.assertEqual(result["reason"], "human_intervention_required")
+                self.assertEqual(self.audits[-1]["action"], "stop_for_human")
+                self.assertEqual(self.audits[-1]["detail"], "human_intervention_required")
+        self.assertEqual(self.calls, [])
+
+    def test_human_handoff_is_audited_without_task_id(self):
+        with patch.dict(os.environ):
+            os.environ.pop("DSB_TASK_ID", None)
+            for situation in ("login_required", "dialog"):
+                with self.subTest(situation=situation):
+                    result = r.recover(situation)
+                    self.assertEqual(result["rc"], 2)
+                    self.assertEqual(result["action"], "stop_for_human")
+                    self.assertEqual(result["reason"], "human_intervention_required")
+                    self.assertEqual(self.audits[-1], {
+                        "kind": "recovery", "situation": situation,
+                        "action": "stop_for_human", "outcome": "refused",
+                        "detail": "human_intervention_required",
+                    })
+        self.assertEqual(len(self.audits), 2)
         self.assertEqual(self.calls, [])
 
     def test_refreshed_observation_does_not_claim_target_recovered(self):
