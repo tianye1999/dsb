@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 function record(event, extra = {}) {
   fs.appendFileSync(process.env.TEST_EVENTS, JSON.stringify({ event, pid: process.pid, ...extra }) + '\n');
 }
-record('start');
+record('start', { activeFile: process.env.DSB_ACTIVE_TASK_FILE, auditFile: process.env.DSB_AUDIT_FILE });
 const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
 record('descendant', { child: descendant.pid });
 setInterval(() => {}, 1000);

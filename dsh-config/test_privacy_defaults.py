@@ -57,6 +57,18 @@ class PrivacyDefaultsTest(unittest.TestCase):
             self.assertFalse(privacy.enabled_false(source))
         self.assertFalse(privacy.enabled_false('- id: session-log-deepseek\n  config:\n    other: 1\n  unrelated:\n    enabled: false\n'))
 
+    def test_report_layer_verifier_requires_composed_id(self):
+        verified = '- id: session-log-deepseek\n  config: {enabled: false}\n- id: dsb-report\n  name: dsb-report\n'
+        result = subprocess.run([sys.executable, str(HERE / 'privacy_defaults.py'),
+                                 '--verify-dump', '--require-report'], input=verified,
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0)
+        result = subprocess.run([sys.executable, str(HERE / 'privacy_defaults.py'),
+                                 '--verify-dump', '--require-report'],
+                                input=verified.replace('- id: dsb-report', '- id: not-report'),
+                                text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+
     def test_unsupported_shapes_fail_without_writing(self):
         for source in ('{not: an-array}\n', '[{id: other}]\n',
                        '- id: session-log-deepseek\n  config: *alias\n'):

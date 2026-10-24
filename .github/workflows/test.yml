@@ -59,8 +59,10 @@ jobs:
       - name: WebView recovery and UI patch regression checks
         run: |
           node app/tests/run-webview-recovery-tests.mjs
+          node app/tests/run-report-tests.mjs
           python3 dsh-web-tweaks/test_tweaks.py
           node --test dsh-web-tweaks/ui-contract.test.mjs
+          node --test dsh-web-tweaks/dsb-report/test-client.mjs dsh-web-tweaks/dsb-report/test-web-report.mjs
           python3 termux/test-dsh-up.py
       - name: permission-gated accessibility recovery checks
         run: node app/tests/run-accessibility-recovery-tests.mjs
@@ -78,6 +80,7 @@ jobs:
           DSB_DSH_TEST_ROOT="$GITHUB_WORKSPACE/installer/dsh" python3 -m unittest discover -s installer/tests -p test_profiles.py
           DSB_DSH_TEST_ROOT="$GITHUB_WORKSPACE/installer/dsh" node --test installer/tests/dsh-routing.mjs
           DSH_TEST_MODULES="$GITHUB_WORKSPACE/installer/dsh/node_modules" node --test dsh-web-tweaks/recap/route-security.test.mjs
+          DSH_TEST_MODULES="$GITHUB_WORKSPACE/installer/dsh/node_modules" node --test dsh-web-tweaks/dsb-report/route-security.test.mjs
 
   shell-and-manifest:
     name: Python + ShellCheck + JS syntax + Android manifest

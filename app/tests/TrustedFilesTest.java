@@ -69,6 +69,14 @@ public final class TrustedFilesTest {
         check(TrustedFiles.CHUNK == 12288, "legacy default remains 12 KiB");
         check(TrustedFiles.MAX_REQUEST == 40 * 1024 * 1024 && TrustedFiles.MAX_REPLY == 4 * 1024 * 1024, "size caps unchanged");
         spool(root -> {
+            String expired = create(root, new byte[]{1});
+            String live = create(root, new byte[]{2});
+            expire(root, expired);
+            TrustedFiles.pruneExpired(root);
+            check(!new File(root, expired).exists(), "startup prune removes expired spool");
+            check(new File(root, live).exists(), "startup prune preserves live spool");
+        });
+        spool(root -> {
             byte[] data = pattern(65536 + 97);
             String id = create(root, data);
             check(Arrays.equals(Base64.getDecoder().decode(TrustedFiles.read(root, id, NONCE, 0)), Arrays.copyOf(data, 12288)), "old READ default");

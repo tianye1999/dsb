@@ -15,7 +15,7 @@ if [ -e "$SOCK" ] || [ -L "$SOCK" ] || [ -e "$IPC/bridge-launch.pid" ]; then
   exit 1
 fi
 setsid nohup proot-distro login --no-kill-on-exit ubuntu -- \
-  /bin/bash -c 'export PATH=/usr/local/bin:/usr/bin:/bin; unset DEEPSEEK_API_KEY ZAI_CODING_CN_API_KEY; export BRIDGE_SOCKET=/data/data/com.termux/files/home/.dsb-ipc/bridge.sock; cd /root/dsh-bridge && exec node bridge.mjs' \
+  /bin/bash -c 'export PATH=/usr/local/bin:/usr/bin:/bin; . /root/dsh-config/report-paths.sh || exit 1; unset DEEPSEEK_API_KEY ZAI_CODING_CN_API_KEY; export BRIDGE_SOCKET=/data/data/com.termux/files/home/.dsb-ipc/bridge.sock; cd /root/dsh-bridge && exec node bridge.mjs' \
   >>"$H/dsb/bridge.log" 2>&1 </dev/null 9>&- &
 printf '%s\n' "$!" > "$IPC/bridge-launch.pid"
 for ((n=0;n<30;n++)); do

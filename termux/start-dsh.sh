@@ -17,7 +17,7 @@ if [ "$1" = "--restart" ]; then pkill -f 'dsh web' 2>/dev/null; sleep 3; fi
 if port_up; then echo 'DSH_WEB_UP (already)'; else
   MARK=$(wc -l < "$HOME/dsh-web.log" 2>/dev/null || echo 0)
   setsid nohup proot-distro login ubuntu -- /bin/bash -c \
-    'export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; [ -f /root/.dsh/.glm-api-key ] && export ZAI_CODING_CN_API_KEY=$(cat /root/.dsh/.glm-api-key); export DEEPSEEK_API_KEY=$(cat /root/.dsh/.deepseek-key 2>/dev/null); mkdir -p /root/dsb-workspaces; cd /root/dsb-workspaces || exit 1; args=(); [ ! -f /root/dsh-config/installer.web.patch.yml ] || args=(--patch /root/dsh-config/installer.web.patch.yml); exec dsh web "${args[@]}" --host 127.0.0.1 --port 3080 --no-open' \
+    'export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; . /root/dsh-config/report-paths.sh || exit 1; [ -f /root/.dsh/.glm-api-key ] && export ZAI_CODING_CN_API_KEY=$(cat /root/.dsh/.glm-api-key); export DEEPSEEK_API_KEY=$(cat /root/.dsh/.deepseek-key 2>/dev/null); mkdir -p /root/dsb-workspaces; cd /root/dsb-workspaces || exit 1; args=(); [ ! -f /root/dsh-config/installer.web.patch.yml ] || args=(--patch /root/dsh-config/installer.web.patch.yml); exec dsh web "${args[@]}" --host 127.0.0.1 --port 3080 --no-open' \
     >> "$HOME/dsh-web.log" 2>&1 &
   # The iteration variable only bounds startup polling; do not change the timing.
   # shellcheck disable=SC2034

@@ -98,7 +98,7 @@ test('POST remains closed independently of enabled state and credentials',authTe
     f.config.enabled=enabled;assert.equal((await f.call('POST','/recap/api',{cookie})).status,410);
   }
 });
-test('3080 route inventory contains only recap; no private recap server remains',()=>{
+test('3080 route inventory contains only authenticated recap and report routes',()=>{
   const tweaks=new URL('../',import.meta.url);
   const walk=dir=>fs.readdirSync(dir,{withFileTypes:true}).flatMap(entry=>{
     const full=path.join(dir,entry.name);
@@ -107,8 +107,12 @@ test('3080 route inventory contains only recap; no private recap server remains'
   const root=path.resolve(tweaks.pathname);
   const sources=walk(root).filter(file=>/\.(js|mjs|py|sh)$/.test(file)&&!file.endsWith('.test.mjs'));
   const routes=sources.filter(file=>/webServer\s*\.\s*(?:register|registerUpgrade|registerFallback)\s*\(|\bcreateServer\s*\(/.test(fs.readFileSync(file,'utf8')));
-  assert.deepEqual(routes.map(file=>path.relative(root,file)),['recap/hardened/index.js']);
-  const host=fs.readFileSync(routes[0],'utf8');
+  assert.deepEqual(routes.map(file=>path.relative(root,file)).sort(),
+    ['dsb-report/index.js','recap/hardened/index.js']);
+  const host=fs.readFileSync(path.join(root,'recap/hardened/index.js'),'utf8');
+  const report=fs.readFileSync(path.join(root,'dsb-report/index.js'),'utf8');
+  assert.match(report,/requestRejection/);
+  assert.match(report,/kind: 'exact'/);
   assert.doesNotMatch(host,/createPrivateRecap|recap\.sock|\/inject|followup\(/);
   assert.match(host,/routePath: z\.string\(\)\.default\('\/recap\/api'\)/);
 });

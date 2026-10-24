@@ -12,8 +12,18 @@ import re
 import task_status
 
 
-ACTION_KINDS = frozenset(("tap", "swipe", "key", "scroll", "long_press", "drag", "type", "open"))
-READ_OPS = frozenset(("look", "wait.app", "wait.stable", "wait.text", "wait.text.ocr"))
+VOCABULARY = json.loads((Path(__file__).with_name("report_vocabulary.json")).read_text(encoding="utf-8"))
+ACTION_KINDS = frozenset(VOCABULARY["action_kinds"])
+GATE_REASON_CODES = frozenset(VOCABULARY["gate_reason_codes"])
+FAILURE_REASON_CODES = frozenset(("OP_APP_NOT_FOUND", "OP_FAILED", "G5_AUDIT_FAILED"))
+READ_OPS = frozenset(VOCABULARY["read_ops"])
+MAX_TIMELINE = 1000
+MAX_REPORT_BYTES = 512 * 1024
+MAX_AUDIT_WINDOW = 32 * 1024 * 1024
+
+
+def _invalid_constant(_value):
+    raise ValueError("non-JSON numeric constant")
 APP_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+")
 TASK_ID_RE = re.compile(
     r"(?:[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}|t[0-9]+-[0-9a-f]{32})"
@@ -52,20 +62,7 @@ REASONS = (
     ("G4_CONFIG", "重复动作预算配置无效", "动作预算配置无效，已拒绝。"),
     ("G4_CONFIG", "手势预算配置无效", "手势预算配置无效，已拒绝。"),
 )
-EXPLANATIONS = {code: explanation for code, _, explanation in REASONS}
-EXPLANATIONS.update({
-    "G1_OTHER": "画面或屏幕绑定无法确认，已拒绝。",
-    "G5_AUDIT_FAILED": "留证失败，结果不能确认。",
-    "R3_OTHER": "派发前目标复核未通过，动作没有下发。",
-    "VD_POLICY": "屏幕隔离策略已拦下操作。",
-    "CHECK_GATE_PRIVACY": "命令可能暴露隐私，已暂停等待确认。",
-    "CHECK_GATE_EXFILTRATION": "命令可能向外发送本机数据，已拦下。",
-    "CHECK_GATE_DESTRUCTIVE": "命令可能删除或不可逆地修改数据，已拦下。",
-    "CHECK_GATE_SYSTEM_CHANGE": "命令可能更改系统设置，已拦下。",
-    "CHECK_GATE_OTHER": "命令钩子已拦下操作。",
-    "HANDOFF": "任务停在需要人工接管的地方。",
-    "OTHER_REFUSAL": "安全检查未通过，动作没有下发。",
-})
+EXPLANATIONS = VOCABULARY["reasons"]
 
 
 def _finite_number(value):
@@ -86,18 +83,20 @@ def _app(row):
         value = row.get(key)
         if isinstance(value, str):
             package = value.split("/", 1)[0]
-            if APP_RE.fullmatch(package):
+            if len(package) <= 200 and APP_RE.fullmatch(package):
                 return package
     return None
 
 
-def _reason_code(row):
+def reason_code_for(row):
     policy = row.get("vd_policy")
     if policy in ("vd_required", "vd_active_elsewhere"):
         return "VD_REQUIRED" if policy == "vd_required" else "VD_POLICY"
     reason = row.get("reason")
     if not isinstance(reason, str):
-        return "OTHER_REFUSAL"
+        return _unclassified(row)
+    if row.get("kind") == "open" and reason == "app_not_found":
+        return "OP_APP_NOT_FOUND"
     if reason.startswith("vd_required:"):
         return "VD_REQUIRED"
     if reason == "audit_failed":
@@ -108,7 +107,12 @@ def _reason_code(row):
     for code, marker, _ in REASONS:
         if marker in reason:
             return code
-    return "OTHER_REFUSAL"
+    return _unclassified(row)
+
+
+def _unclassified(row):
+    # 闸门拒绝行（_refuse_action）带 points；原因未收录时仍计为安全拒绝，宁可多报不漏报。
+    return "OTHER_REFUSAL" if "points" in row else "OP_FAILED"
 
 
 def _command_code(row):
@@ -124,7 +128,8 @@ def _command_code(row):
 def _ledger_state(ledger, task_id):
     tasks = ledger.get("tasks") if isinstance(ledger, dict) else None
     state = tasks.get(task_id) if isinstance(tasks, dict) else None
-    return state if state in ("running", "reply_received", "cancelled") else None
+    return state if state in ("running", "reply_received", "cancelled", "web_completed",
+                             "web_interrupted", "web_error") else None
 
 
 def build_report(audit_rows, ledger, task_id):
@@ -132,8 +137,13 @@ def build_report(audit_rows, ledger, task_id):
     if not isinstance(task_id, str) or not TASK_ID_RE.fullmatch(task_id):
         raise ValueError("invalid task_id")
     rows = [row for row in audit_rows if isinstance(row, dict) and row.get("task_id") == task_id]
-    starts = [r for r in rows if r.get("kind") == "task_start"]
-    ends = [r for r in rows if r.get("kind") == "task_end"]
+    script_starts = [r for r in rows if r.get("kind") == "task_start"]
+    script_ends = [r for r in rows if r.get("kind") == "task_end"]
+    bridge_starts = [r for r in rows if r.get("kind") == "report_task_start"]
+    bridge_ends = [r for r in rows if r.get("kind") == "report_task_end"]
+    bridge_task = bool(bridge_starts or bridge_ends)
+    starts = bridge_starts if bridge_task else script_starts
+    ends = bridge_ends if bridge_task else script_ends
     start = starts[0] if len(starts) == 1 else None
     end = ends[0] if len(ends) == 1 else None
     started_at = _time(start.get("ts")) if start else None
@@ -146,15 +156,29 @@ def build_report(audit_rows, ledger, task_id):
 
     refusals = Counter()
     timeline = []
-    dispatched = handoffs = hook_refusals = 0
+    dispatched = handoffs = hook_refusals = shadow_would_block = typesafe_warnings = 0
     hook_seen = False
     for row in rows:
         kind = row.get("kind")
         if kind in ACTION_KINDS:
-            if row.get("allowed") is False or (kind == "open" and row.get("status") == "refused"):
-                code = _reason_code(row)
-                refusals[code] += 1
-                result = "refused"
+            if row.get("allowed") is False or (kind == "open" and row.get("status") in ("refused", "failed")):
+                raw_code = row.get("reason_code")
+                code = (raw_code if isinstance(raw_code, str) and raw_code in EXPLANATIONS and
+                        raw_code != "OTHER_REFUSAL" else reason_code_for(row))
+                if code != "G5_AUDIT_FAILED" and row.get("allowed") is False and "points" in row and \
+                        code not in GATE_REASON_CODES:
+                    code = "OTHER_REFUSAL"
+                if code in GATE_REASON_CODES:
+                    refusals[code] += 1
+                    result = "refused"
+                else:
+                    code = code if code in FAILURE_REASON_CODES else "OP_FAILED"
+                    result = "failed"
+            elif kind == "open" and row.get("status") == "completed":
+                dispatched += 1
+                code = None
+                result = ("dispatched" if row.get("dispatch_status") in ("submitted", "command_completed")
+                          else "opened")
             elif row.get("dispatch_status") in ("command_completed", "submitted"):
                 dispatched += 1
                 code, result = None, "dispatched"
@@ -176,24 +200,48 @@ def build_report(audit_rows, ledger, task_id):
                 timeline.append({"at": _time(row.get("ts")), "action_type": "command",
                                  "app": None, "result": "refused", "reason_code": code,
                                  "explanation": EXPLANATIONS[code]})
+            elif row.get("mode") == "shadow" and (row.get("would_decision") in ("deny", "ask") or
+                                                       row.get("decision") in ("deny", "ask")):
+                shadow_would_block += 1
+                timeline.append({"at": _time(row.get("ts")), "action_type": "command",
+                                 "app": None, "result": "observed", "reason_code": "SHADOW_WOULD_BLOCK",
+                                 "explanation": EXPLANATIONS["SHADOW_WOULD_BLOCK"]})
+            if row.get("warning") == "typesafe_unavailable":
+                typesafe_warnings += 1
+                timeline.append({"at": _time(row.get("ts")), "action_type": "command",
+                                 "app": None, "result": "unverified", "reason_code": "TYPESAFE_UNAVAILABLE",
+                                 "explanation": EXPLANATIONS["TYPESAFE_UNAVAILABLE"]})
         elif kind == "read" and row.get("op") in READ_OPS:
             timeline.append({"at": _time(row.get("ts")), "action_type": row["op"],
                              "app": _app(row), "result": "observed", "reason_code": None,
                              "explanation": None})
 
+    timeline_truncated = len(timeline) > MAX_TIMELINE
+    timeline = timeline[:MAX_TIMELINE]
     status = end.get("terminal_status") if end and start else None
     rc = end.get("exit_code") if end else None
-    valid_terminal = bool(start and end and rows.index(start) < rows.index(end) and
+    valid_script_terminal = bool(not bridge_task and start and end and rows.index(start) < rows.index(end) and
                           type(rc) is int and
                           ((status == "completed" and rc == 0 and end.get("ok") is True) or
                            (status in task_status.TERMINAL_STATES[1:] and rc != 0 and end.get("ok") is False)))
+    valid_bridge_terminal = bool(bridge_task and len(bridge_starts) == 1 and len(bridge_ends) == 1 and
+        not script_starts and not script_ends and rows.index(start) < rows.index(end) and
+        ((status in ("reply_received", "empty_reply") and end.get("evidence_kind") == "bridge_reply") or
+         (status == "cancelled" and end.get("evidence_kind") == "stop_confirmed") or
+         (status == "error" and end.get("evidence_kind") == "runtime_error")))
+    valid_web_terminal = bool(bridge_task and len(bridge_starts) == 1 and len(bridge_ends) == 1 and
+        not script_starts and not script_ends and rows.index(start) < rows.index(end) and
+        start.get("evidence_kind") == "web_turn_start" and end.get("evidence_kind") == "web_turn_end" and
+        status in ("web_completed", "web_interrupted", "web_error"))
+    valid_terminal = valid_script_terminal or valid_bridge_terminal or valid_web_terminal
+    observed_conflict = any(r.get("kind") == "report_attribution_conflict" for r in rows)
     if valid_terminal and status == "cancelled":
         outcome = "user_stopped"
-    elif handoffs and valid_terminal:
+    elif handoffs and valid_script_terminal:
         outcome = "handoff"
-    elif valid_terminal and status == "completed":
+    elif valid_script_terminal and status == "completed":
         outcome = "completed"
-    elif valid_terminal:
+    elif valid_script_terminal or (valid_bridge_terminal and status == "error"):
         outcome = "error"
     else:
         outcome = "unknown"
@@ -206,10 +254,20 @@ def build_report(audit_rows, ledger, task_id):
         "counts": {"dispatched_actions": dispatched,
                    "gate_refusals_by_reason": dict(sorted(refusals.items())),
                    "command_hook_refusals": hook_refusals if hook_seen else None,
+                   "command_hook_shadow_would_block": shadow_would_block if hook_seen else None,
+                   "typesafe_unavailable_warnings": typesafe_warnings if hook_seen else None,
                    "handoff_points": handoffs},
         "timeline": timeline,
         "coverage": {"audit_linked": bool(rows), "lifecycle_valid": valid_terminal,
-                     "command_hook_linked": hook_seen},
+                     "command_hook_linked": hook_seen,
+                     "attribution_complete": bool(valid_terminal and
+                                                  (valid_script_terminal or end.get("attribution_complete") is True) and
+                                                  not observed_conflict and
+                                                  end.get("attribution_conflict") is not True and
+                                                  end.get("interrupted") is not True),
+                     "concurrent_turns": bool(valid_web_terminal and end.get("concurrent_turns") is True),
+                     "interrupted": bool(valid_web_terminal and end.get("interrupted") is True),
+                     "timeline_truncated": timeline_truncated},
     }
 
 
@@ -224,11 +282,14 @@ def render_markdown(report):
              f"开始：{task['started_at'] or '未知'}；结束：{task['ended_at'] or '未知'}；"
              f"耗时：{str(task['duration_s']) + ' 秒' if task['duration_s'] is not None else '未知'}。",
              "", "## 闸门与动作", "",
-             f"已确认派发动作：{counts['dispatched_actions']} 次。",
+             f"已记录动作：{counts['dispatched_actions']} 次。",
              f"停下等待人工：{counts['handoff_points']} 处。"]
     hook = counts["command_hook_refusals"]
     lines.append("命令钩子拒绝：未覆盖（独立日志尚未按任务关联）。" if hook is None
                  else f"已关联的命令钩子拒绝：{hook} 次；不代表独立日志已完整覆盖。")
+    if counts["command_hook_shadow_would_block"] is not None:
+        lines.append(f"观察模式本应拦截（实际放行）：{counts['command_hook_shadow_would_block']} 次。")
+        lines.append(f"TypeSafe 不可用、按现有策略放行：{counts['typesafe_unavailable_warnings']} 次。")
     refusals = counts["gate_refusals_by_reason"]
     if refusals:
         for code, count in refusals.items():
@@ -244,6 +305,10 @@ def render_markdown(report):
                      f"{event['app'] or '应用未知'} · {event['result']}{detail}")
     if not report["coverage"]["lifecycle_valid"]:
         lines.extend(["", "生命周期证据不足；账本回执不能证明任务目标完成或用户停止。"])
+    if not report["coverage"]["attribution_complete"]:
+        lines.extend(["", "动作归属证据不完整；以上仅为已关联记录。"])
+    if report["coverage"]["timeline_truncated"]:
+        lines.extend(["", "时间线已截断；上方计数仍覆盖读取到的审计窗口。"])
     return "\n".join(lines) + "\n"
 
 
@@ -252,6 +317,7 @@ def main(argv=None):
     parser.add_argument("--audit", required=True, type=Path)
     parser.add_argument("--ledger", required=True, type=Path)
     parser.add_argument("--task-id", required=True)
+    parser.add_argument("--audit-offset", type=int, default=0)
     parser.add_argument("--json-out", required=True, type=Path)
     parser.add_argument("--markdown-out", required=True, type=Path)
     args = parser.parse_args(argv)
@@ -259,12 +325,23 @@ def main(argv=None):
     if len(set(paths)) != len(paths):
         parser.error("input and output paths must be distinct")
     try:
-        rows = list(task_status.read_audit(args.audit))
+        size = args.audit.stat().st_size
+        if args.audit_offset < 0 or args.audit_offset > size or size - args.audit_offset > MAX_AUDIT_WINDOW:
+            raise ValueError("invalid audit window")
+        if args.audit_offset:
+            with args.audit.open("rb") as stream:
+                stream.seek(args.audit_offset)
+                rows = [json.loads(line, parse_constant=_invalid_constant) for line in stream if line.strip()]
+        else:
+            rows = list(task_status.read_audit(args.audit))
         ledger = json.loads(args.ledger.read_text(encoding="utf-8"))
         report = build_report(rows, ledger, args.task_id)
-        args.json_out.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-                                 encoding="utf-8")
-        args.markdown_out.write_text(render_markdown(report), encoding="utf-8")
+        json_bytes = (json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
+        markdown_bytes = render_markdown(report).encode("utf-8")
+        if max(len(json_bytes), len(markdown_bytes)) > MAX_REPORT_BYTES:
+            raise ValueError("report too large")
+        args.json_out.write_bytes(json_bytes)
+        args.markdown_out.write_bytes(markdown_bytes)
     except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
         parser.exit(3, "report input or output invalid; no raw content printed\n")
     return 0

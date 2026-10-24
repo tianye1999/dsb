@@ -205,6 +205,16 @@ public class OverlayService extends Service {
     private EditText voiceInput;
     private boolean voiceShown;
     private TextView statusView;
+    private LinearLayout reportBox;
+    private TextView reportSummaryView;
+    private TextView reportTimelineView;
+    private Button reportDetailsButton;
+    private volatile ExecutionReport.Reference reportReference;
+    private volatile String reportSummaryText = "";
+    private boolean reportExpanded;
+    private boolean reportPending;
+    private boolean reportDetailLoaded;
+    private boolean reportDetailLoading;
     private String lastStatusText = "待命";
     private Button stopButton;
     private ScrollView logBox;
@@ -381,6 +391,8 @@ public class OverlayService extends Service {
             return;
         }
         INSTANCE = this;
+        new Thread(() -> TrustedFiles.pruneExpired(new java.io.File(getFilesDir(), "trusted-channel")),
+                "trusted-spool-prune").start();
         restoreTaskRecovery();
         createdAt = System.currentTimeMillis();
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
@@ -554,6 +566,9 @@ public class OverlayService extends Service {
                                 if (agentRunning || taskWorkerRunning || cancelInFlight || cancelUnconfirmed) stopTask();
                                 else setBubbleBusy(false);
                                 log("⛔ ABORT 用户点击悬浮球，中止任务");
+                            } else if (reportPending) {
+                                reportPending = false;
+                                showPanel(true);
                             } else {
                                 openWebUi();                 // 点球 = 变回网页形态（交互都在网页里做）
                             }
@@ -617,6 +632,34 @@ public class OverlayService extends Service {
         updateStopControl();
         panel.addView(statusRow);
 
+        reportBox = new LinearLayout(this);
+        reportBox.setOrientation(LinearLayout.VERTICAL);
+        reportBox.setPadding(0, dp(6), 0, dp(6));
+        TextView reportTitle = new TextView(this);
+        reportTitle.setText("执行报告");
+        reportTitle.setTextSize(14);
+        reportTitle.setTextColor(0xFF22252B);
+        reportBox.addView(reportTitle);
+        reportSummaryView = new TextView(this);
+        reportSummaryView.setTextSize(12);
+        reportSummaryView.setTextColor(0xFF333333);
+        reportBox.addView(reportSummaryView);
+        reportDetailsButton = btn("查看详情", v -> toggleReportDetails());
+        reportBox.addView(reportDetailsButton);
+        reportTimelineView = new TextView(this);
+        reportTimelineView.setTextSize(12);
+        reportTimelineView.setTextColor(0xFF333333);
+        ScrollView reportScroll = new ScrollView(this);
+        reportScroll.addView(reportTimelineView);
+        reportScroll.setVisibility(View.GONE);
+        reportBox.addView(reportScroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                Math.min(dp(180), Math.max(dp(80), getResources().getDisplayMetrics().heightPixels - dp(450)))));
+        reportTimelineView.setTag(reportScroll);
+        reportBox.setVisibility(View.GONE);
+        panel.addView(reportBox);
+        renderReportPanel();
+
         // 过程（默认收起，点开才看细节）
         logToggleBtn = btn("看过程 ▾", v -> toggleLog());
         panel.addView(logToggleBtn);
@@ -639,14 +682,62 @@ public class OverlayService extends Service {
                 PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;
         lp.x = dp(4);
-        lp.y = dp(380);
+        lp.y = Math.min(dp(380), Math.max(dp(8),
+                getResources().getDisplayMetrics().heightPixels - dp(620)));
         panel.setTag(lp);
     }
 
     private void toggleLog() {
+        if (!logExpanded && reportExpanded) toggleReportDetails();
         logExpanded = !logExpanded;
         if (logBox != null) logBox.setVisibility(logExpanded ? View.VISIBLE : View.GONE);
         if (logToggleBtn != null) logToggleBtn.setText(logExpanded ? "收起过程 ▴" : "看过程 ▾");
+    }
+
+    private void showReport(long gen, ExecutionReport.Summary summary, ExecutionReport.Reference reference) {
+        taskUi(gen, () -> {
+            reportReference = reference;
+            reportSummaryText = summary.text;
+            reportExpanded = false;
+            reportPending = !panelShown;
+            reportDetailLoaded = false;
+            reportDetailLoading = false;
+            if (bubble != null && reportPending) bubble.setContentDescription("执行报告待查看，点按打开");
+            renderReportPanel();
+        });
+    }
+
+    private void renderReportPanel() {
+        if (reportBox == null || reportSummaryText.isEmpty()) return;
+        reportSummaryView.setText(reportSummaryText);
+        reportDetailsButton.setVisibility(reportReference == null ? View.GONE : View.VISIBLE);
+        reportDetailsButton.setText("查看详情");
+        reportTimelineView.setText("");
+        ((ScrollView) reportTimelineView.getTag()).setVisibility(View.GONE);
+        reportBox.setVisibility(View.VISIBLE);
+    }
+
+    private void toggleReportDetails() {
+        ExecutionReport.Reference reference = reportReference;
+        if (reference == null || reportTimelineView == null) return;
+        if (!reportExpanded && logExpanded) toggleLog();
+        ScrollView scroll = (ScrollView) reportTimelineView.getTag();
+        reportExpanded = !reportExpanded;
+        scroll.setVisibility(reportExpanded ? View.VISIBLE : View.GONE);
+        reportDetailsButton.setText(reportExpanded ? "收起详情" : "查看详情");
+        if (!reportExpanded || reportDetailLoaded || reportDetailLoading) return;
+        reportDetailLoading = true;
+        reportTimelineView.setText("正在读取详情…");
+        final long gen = taskGeneration;
+        new Thread(() -> {
+            ExecutionReport detail = DshClient.queryReport(OverlayService.this, reference);
+            taskUi(gen, () -> {
+                if (reportReference != reference) return;
+                reportDetailLoading = false;
+                reportDetailLoaded = detail != null;
+                reportTimelineView.setText(detail == null ? "详情暂不可用，摘要仍可查看。" : detail.displayText());
+            });
+        }, "task-report-read").start();
     }
 
     private void stopTask() {
@@ -786,6 +877,12 @@ public class OverlayService extends Service {
             }
             taskRecoveryId = saved.id;
             taskTransportSettled = false;
+            reportReference = null;
+            reportSummaryText = "";
+            reportPending = false;
+            reportDetailLoaded = false;
+            reportDetailLoading = false;
+            main.post(() -> { if (reportBox != null) reportBox.setVisibility(View.GONE); });
             synchronized (decisionLock) { pendingDecision = null; }
             taskCancelled = false;
             agentRunning = true;
@@ -2048,6 +2145,7 @@ public class OverlayService extends Service {
                 long secs = (System.currentTimeMillis() - start) / 1000;
                 if (r.ok && r.text != null && !r.text.trim().isEmpty()) {
                     synchronized (taskLock) { if (taskActive(gen)) taskTransportSettled = true; }
+                    if (r.reportSummary != null) showReport(gen, r.reportSummary, r.reportReference);
                     log("💡 " + r.text);
                     log("   （耗时 " + secs + " 秒）");
                     taskStatus(gen, "已回复，结果未核验（" + secs + " 秒）：" + (r.text.length() > 60 ? r.text.substring(0, 60) + "…" : r.text));

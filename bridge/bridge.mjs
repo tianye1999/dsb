@@ -14,14 +14,32 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import { TaskLedger } from './task-ledger.mjs';
+import { ActiveTask } from './active-task.mjs';
+import { TaskReportStore, incompleteSummary, failureStatus } from './task-report-store.mjs';
 import { listenPrivate } from './private-listener.mjs';
 
 const DIR = process.env.BRIDGE_DIR || '/tmp/dsh-bridge';
 const DSH = process.env.BRIDGE_DSH || 'dsh';
 const HOME = process.env.HOME || '/root';
 const taskLedger = new TaskLedger(path.join(HOME, '.dsh-phone', 'bridge-tasks.json'));
+const ACTIVE_FILE = process.env.DSB_ACTIVE_TASK_FILE || path.join(HOME, '.dsh-phone', 'active-task.json');
+const activeTask = new ActiveTask(ACTIVE_FILE);
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const AGENT = process.env.BRIDGE_AGENT_DIR ||
+  (fs.existsSync(path.join(HOME, '.dsh-phone', 'skills', 'task_report.py'))
+    ? path.join(HOME, '.dsh-phone', 'skills') : path.join(REPO, 'agent'));
+const AUDIT_FILE = process.env.DSB_AUDIT_FILE || process.env.BRIDGE_AUDIT_PATH || path.join(AGENT, 'safe_tap_audit.jsonl');
+const TOOL_ENV = { DSB_ACTIVE_TASK_FILE: ACTIVE_FILE, DSB_AUDIT_FILE: AUDIT_FILE };
+const reportStore = new TaskReportStore({
+  dir: path.join(HOME, '.dsh-phone', 'reports'),
+  audit: AUDIT_FILE,
+  script: path.join(AGENT, 'task_report.py'),
+  python: process.env.BRIDGE_PYTHON || 'python3',
+});
 let cancellationInFlight = false;
+let stopPendingId = null;
 const PROFILE = process.env.BRIDGE_PROFILE || 'headless';
 const BRAIN = process.env.BRIDGE_BRAIN || 'dsh';           // dsh | api
 const PERMISSION_MODE = process.env.BRIDGE_PERMISSION_MODE || 'danger-full-access';  // 和网页会话一致：不设限
@@ -126,7 +144,7 @@ function runDsh(prompt) {
       cwd: process.env.HOME || '/root',
       detached: true,
       // 关键：网页会话是 danger-full-access，这里必须一致，否则 bash 会被沙箱挡住 → DSH 没法用 adb 自己动手
-      env: { ...process.env, DSH_PERMISSION_MODE: PERMISSION_MODE },
+      env: { ...process.env, ...TOOL_ENV, DSH_PERMISSION_MODE: PERMISSION_MODE },
     });
     activeChildren.add(p);
     if (p.pid) ownedGroups.add(p.pid);
@@ -260,7 +278,7 @@ function startRuntime() {
   const child = spawn(DSH, ['--profile', RUNTIME_PROFILE], {
     cwd: HOME,
     detached: true,
-    env: { ...process.env, DSH_PERMISSION_MODE: PERMISSION_MODE },
+    env: { ...process.env, ...TOOL_ENV, DSH_PERMISSION_MODE: PERMISSION_MODE },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const rt = { child, alive: true, sid, nextId: 1, pending: new Map(), assistant: [], onTurnEnd: null };
@@ -357,23 +375,27 @@ async function promptTurn(rt, text, timeoutMs) {
 }
 
 /** 一轮对话（串行执行，避免和"记忆压缩"打架） */
-async function rawTurn(text, timeoutMs) {
+async function rawTurn(text, timeoutMs, taskId, reservedContext) {
   const rt = await ensureRuntime();
   rt.assistant = [];
-  await promptTurn(rt, text, timeoutMs);
-  return rt.assistant.filter(Boolean);
+  const context = reservedContext || (taskId ? activeTask.activate(taskId, taskLedger.state) : null);
+  try { await promptTurn(rt, text, timeoutMs); }
+  finally { if (context && stopPendingId !== taskId) activeTask.close(taskId, context.generation); }
+  return { messages: rt.assistant.filter(Boolean), attributionComplete: !!context };
 }
 
 /** 用户的一轮：原话进、最后答复出；之后按需排队做记忆压缩 */
-async function askRuntime(text) {
+async function askRuntime(text, taskId, reservedContext) {
   return enqueueTurn(async () => {
     const rt = await ensureRuntime();
-    const all = await rawTurn(text, TURN_TIMEOUT_MS);
+    const turn = await rawTurn(text, TURN_TIMEOUT_MS, taskId, reservedContext);
+    const all = turn.messages;
     const answer = all.length ? all[all.length - 1] : '';
     if (answer) appendTranscript(text, answer);
     memState.turns += 1; saveMemState();
     maybeCompact();
-    return { text: answer, sessionId: rt.sid, steps: all.length };
+    return { text: answer, sessionId: rt.sid, steps: all.length,
+      attributionComplete: turn.attributionComplete };
   });
 }
 
@@ -472,6 +494,7 @@ function logError(scope, error) {
 function clientError(error, fallback) {
   logError('bridge-error', error);
   for (const code of ['valid task_id required', 'duplicate task_id', 'task_busy',
+    'active_task_busy_web', 'active_task_busy',
     'task_capacity_exhausted', 'task_state_unavailable', 'task_state_unknown_after_restart',
     'task_mismatch', 'Task cancelled']) {
     if (error?.message === code) return code;
@@ -479,7 +502,7 @@ function clientError(error, fallback) {
   return fallback;
 }
 
-function send(res, code, obj) {
+async function send(res, code, obj) {
   if (res.taskId) {
     obj = { ...obj, task_id: res.taskId, protocol: 2, transport_settled: false };
     if (code === 200 && obj.ok) {
@@ -493,9 +516,20 @@ function send(res, code, obj) {
       }
     }
   }
-  const body = JSON.stringify(obj);
-  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body) });
-  res.end(body);
+  if (res.reportTaskId) {
+    try {
+      const saved = await reportStore.buildAndSave(res.reportTaskId, taskLedger.file, res.reportOffset);
+      obj = { ...obj, report_summary: saved.summary };
+      if (code === 200 && obj.ok && obj.transport_settled) obj.report_token = saved.token;
+    } catch {
+      obj = { ...obj, report_summary: incompleteSummary() };
+    }
+  }
+  try {
+    const body = JSON.stringify(obj);
+    res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body) });
+    res.end(body);
+  } catch { /* A disconnected client cannot change recorded task evidence. */ }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -510,14 +544,33 @@ const server = http.createServer(async (req, res) => {
     if (!body || typeof body !== 'object' || Array.isArray(body)) return send(res, 400, { ok: false, error: 'object required' });
     if (Object.hasOwn(body, 'transport_benchmark'))
       return send(res, 409, { ok: false, error: 'benchmark_requires_disposable_fixture' });
+    if (req.url === '/report') {
+      const report = reportStore.get(body.task_id, body.report_token, body.format || 'json');
+      if (report === null) return send(res, 404, { ok: false, error: 'report_not_found' });
+      return send(res, 200, body.format === 'markdown' ? { ok: true, markdown: report } : { ok: true, report });
+    }
     if (['/do', '/ask', '/step'].includes(req.url)) {
+      if (req.url === '/do' && !(body.goal || '').trim())
+        return send(res, 400, { ok: false, error: 'goal required' });
       if (cancellationInFlight) return send(res, 409, { ok: false, error: 'cancellation_in_flight' });
       // Android/proot may expose a dead leader before Node delivers its exit event.
       if (runtime && !runtimeLeaderAlive(runtime.child))
         return send(res, 409, { ok: false, error: 'prior_execution_unknown' });
       if (!runtime && [...ownedGroups].some(pid => !groupDrained(pid)))
         return send(res, 409, { ok: false, error: 'prior_execution_unknown' });
-      try { taskLedger.admit(body.task_id); }
+      const beforeAdmission = taskLedger.state;
+      try {
+        taskLedger.admit(body.task_id);
+        if (req.url === '/do') {
+          try { res.reservedActiveContext = activeTask.activate(body.task_id, taskLedger.state); }
+          catch (error) {
+            taskLedger.rollbackAdmission(body.task_id, beforeAdmission);
+            return send(res, 409, { ok: false, error: clientError(error, 'active_task_unavailable'),
+              message: error.message === 'active_task_busy_web' ? '网页任务正在执行，请稍后再试。' :
+                '任务归属暂不可确认，请稍后再试。', protocol: 2, transport_settled: false });
+          }
+        }
+      }
       catch (e) { return send(res, 409, { ok: false, error: clientError(e, 'task_admission_failed'), protocol: 2, transport_settled: false }); }
       res.taskId = body.task_id;
     } else if (req.url !== '/cancel') {
@@ -560,21 +613,38 @@ const server = http.createServer(async (req, res) => {
     if (req.url.startsWith('/do')) {
       const goal = (body.goal || '').trim();
       if (!goal) return send(res, 400, { error: 'goal required' });
+      res.reportTaskId = body.task_id;
+      try { res.reportOffset = reportStore.lifecycle(body.task_id, 'report_task_start'); }
+      catch { /* Summary stays incomplete. */ }
       const started = Date.now();
+      let reply;
       try {
-        const r = await askRuntime(goal);          // ← 原话直接传，不加任何前后缀
+        const r = await askRuntime(goal, body.task_id, res.reservedActiveContext);  // 原话直接传，不加任何前后缀
         console.log('[do] session=%s ms=%s', r.sessionId, Date.now() - started);
         const hasReply = !!r.text.trim();
-        // A received reply is not independent evidence that the goal was achieved.
-        return send(res, 200, { ok: hasReply, text: r.text, sessionId: r.sessionId,
+        try { reportStore.lifecycle(body.task_id, 'report_task_end', hasReply ? 'reply_received' : 'empty_reply',
+          { attributionComplete: r.attributionComplete }); }
+        catch { /* Report generation will expose missing lifecycle evidence. */ }
+        reply = { ok: hasReply, text: r.text, sessionId: r.sessionId,
           run_status: hasReply ? 'reply_received' : 'empty_reply',
           goal_status: 'unverified', goal_verified: false,
-          error: hasReply ? '' : 'Empty assistant reply', ms: Date.now() - started });
+          error: hasReply ? '' : 'Empty assistant reply', ms: Date.now() - started };
       } catch (e) {
-        return send(res, 200, { ok: false, run_status: 'error',
+        if (res.reservedActiveContext && stopPendingId !== body.task_id) {
+          try { activeTask.close(body.task_id, res.reservedActiveContext.generation); }
+          catch { /* The lifecycle remains incomplete if ownership was lost. */ }
+        }
+        while (cancellationInFlight) await new Promise(resolve => setTimeout(resolve, 25));
+        const terminal = failureStatus(body.task_id, taskLedger.state, stopPendingId);
+        if (terminal) {
+          try { reportStore.lifecycle(body.task_id, 'report_task_end', terminal); }
+          catch { /* Report generation will expose missing lifecycle evidence. */ }
+        }
+        reply = { ok: false, run_status: 'error',
           goal_status: 'unverified', goal_verified: false,
-          error: clientError(e, 'runtime_error'), ms: Date.now() - started });
+          error: clientError(e, 'runtime_error'), ms: Date.now() - started };
       }
+      return send(res, 200, reply);
     }
 
     if (req.url.startsWith('/cancel')) {
@@ -585,10 +655,15 @@ const server = http.createServer(async (req, res) => {
         catch { /* Missing history or prior ownership remains unknown. */ }
       }
       const receipt = { protocol: 2, task_id: id, stop_confirmed: false };
-      if (status === 'confirmed') return send(res, 200, { ...receipt, ok: true, stop_confirmed: true });
+      if (status === 'confirmed') {
+        activeTask.closeConfirmed(id);
+        if (stopPendingId === id) stopPendingId = null;
+        return send(res, 200, { ...receipt, ok: true, stop_confirmed: true });
+      }
       if (status !== 'owned' || cancellationInFlight)
         return send(res, 409, { ...receipt, ok: false, error: 'stop_' + (cancellationInFlight ? 'in_flight' : status) });
       cancellationInFlight = true;
+      stopPendingId = id;
       try {
         cancelGeneration++;
         const rt = runtime;
@@ -600,15 +675,22 @@ const server = http.createServer(async (req, res) => {
         while (!drained() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
         if (!drained()) return send(res, 409, { ...receipt, ok: false, error: 'stop_unverified' });
         taskLedger.confirmStopped(id);
+        activeTask.closeConfirmed(id);
+        stopPendingId = null;
         ownedGroups.clear();
         return send(res, 200, { ...receipt, ok: true, stop_confirmed: true });
       } finally { cancellationInFlight = false; }
     }
 
-    return send(res, 404, { error: 'not found', try: ['/health', '/step', '/ask', '/do', '/cancel'] });
+    return send(res, 404, { error: 'not found', try: ['/health', '/step', '/ask', '/do', '/cancel', '/report'] });
   } catch (e) {
     return send(res, 500, { ok: false, error: clientError(e, 'internal_error') });
   }
 });
 
-listenPrivate(server, process.env.BRIDGE_SOCKET, () => console.log('dsh-bridge private socket ready'));
+listenPrivate(server, process.env.BRIDGE_SOCKET, () => {
+  try { activeTask.recover(taskLedger.state); } catch { console.error('[active-task] active_task_unavailable'); }
+  if (activeTask.errorCode) console.error('[active-task] %s', activeTask.errorCode);
+  try { reportStore.prune(); } catch { console.error('[report] report_store_unavailable'); }
+  console.log('dsh-bridge private socket ready');
+});

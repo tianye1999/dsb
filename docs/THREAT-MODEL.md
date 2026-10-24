@@ -68,6 +68,7 @@ Third-party apps are always operated on a scrcpy virtual display; main-display a
 | Authorized ADB wireless debugging (5555) | Anyone on the same Wi-Fi can send a connection request; **never tap "Allow USB debugging" for an unfamiliar device on the phone** |
 | Text on a page steering the brain (prompt injection) | The brain can be misled by page content; the gates constrain execution but do not stop the steering itself, and cannot guarantee that every irreversible action is recognized and blocked ([visual misjudgement / fallback limits](../agent/safe_tap.py#L1516), plus the same-user bypass risk) |
 | Third-party apps' anti-automation | Platforms may detect and restrict automated access; that is at your own risk |
+| Late tools from an ended task | A background process that starts a tool only after the next turn begins can be attributed to that newer turn; the single active-task slot cannot distinguish its origin |
 
 ## Rules for users
 

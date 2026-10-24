@@ -16,7 +16,10 @@ HOME = pathlib.Path('/data/data/com.termux/files/home')
 PREFIX = '/data/data/com.termux/files/usr'
 READ_CHUNK, WRITE_CHUNK = 64 * 1024, 32 * 1024
 MAX_REQUEST, MAX_REPLY = 40 * 1024 * 1024, 4 * 1024 * 1024
-ROUTES = {'/do', '/ask', '/step', '/cancel', '/health', '/dsh-url'}
+MAX_REPORT_REQUEST = 8 * 1024
+ROUTES = {'/do', '/ask', '/step', '/cancel', '/health', '/dsh-url', '/report'}
+TASK_ID = re.compile(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}')
+REPORT_TOKEN = re.compile(r'[0-9a-fA-F]{64}')
 
 
 def validate_meta(m):
@@ -29,12 +32,25 @@ def validate_meta(m):
     for key, maximum in [('size', MAX_REQUEST), ('timeout_ms', 900000)]:
         if type(m.get(key)) is not int or not 1 <= m[key] <= maximum:
             raise ValueError(key)
+    route = m.get('route')
+    if route not in ROUTES:
+        raise ValueError('route')
+    if route == '/report' and m['size'] > MAX_REPORT_REQUEST:
+        raise ValueError('report_request_size')
     return m
 
 
 def validate_request(r):
     if not isinstance(r, dict) or r.get('path') not in ROUTES or not isinstance(r.get('body'), dict):
         raise ValueError('request')
+    if r['path'] == '/report':
+        body = r['body']
+        if (len(json.dumps(r, ensure_ascii=False).encode()) > MAX_REPORT_REQUEST or
+                set(r) != {'path', 'body'} or set(body) - {'task_id', 'report_token', 'format'} or
+                not isinstance(body.get('task_id'), str) or not TASK_ID.fullmatch(body['task_id']) or
+                not isinstance(body.get('report_token'), str) or not REPORT_TOKEN.fullmatch(body['report_token']) or
+                body.get('format', 'json') not in ('json', 'markdown')):
+            raise ValueError('report_request')
     return r
 
 
@@ -91,7 +107,10 @@ def read_request(meta, end):
         data.extend(piece)
     if hashlib.sha256(data).hexdigest() != meta['sha256']:
         raise ValueError('request_digest')
-    return validate_request(json.loads(data))
+    request = validate_request(json.loads(data))
+    if request['path'] != meta['route']:
+        raise ValueError('route_mismatch')
+    return request
 
 
 class UnixHTTP(http.client.HTTPConnection):

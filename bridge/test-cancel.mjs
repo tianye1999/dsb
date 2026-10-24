@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unixFetch } from './unix-fetch-test.mjs';
+import { ActiveTask } from './active-task.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const A = '11111111-1111-4111-8111-111111111111';
@@ -39,6 +40,8 @@ async function fixture(t, extra = {}) {
   fs.mkdirSync(path.join(dir, '.dsh-phone'));
   fs.writeFileSync(path.join(dir, '.dsh-phone/bridge-tasks.json'), JSON.stringify({
     version: 1, tasks: {}, active: null, latest: null, runtimeOpen: false }));
+  if (extra.TEST_BAD_ACTIVE) fs.writeFileSync(path.join(dir, '.dsh-phone/active-task.json'), '{bad', { mode: 0o600 });
+  if (extra.TEST_BAD_REPORTS) fs.writeFileSync(path.join(dir, '.dsh-phone/reports'), 'not a directory');
   const eventsFile = path.join(dir, 'events');
   const events = () => fs.existsSync(eventsFile) ? fs.readFileSync(eventsFile, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
   fs.chmodSync(path.join(here, 'fake-dsh-test.mjs'), 0o755);
@@ -46,6 +49,7 @@ async function fixture(t, extra = {}) {
     env: { PATH: process.env.PATH, HOME: dir, BRIDGE_SOCKET: socketPath,
       BRIDGE_DSH: path.join(here, 'fake-dsh-test.mjs'), BRIDGE_BRAIN: 'dsh',
       BRIDGE_DIR: path.join(dir, 'shots'), BRIDGE_MEM_DIR: path.join(dir, 'memory'),
+      BRIDGE_AUDIT_PATH: path.join(dir, 'audit.jsonl'),
       BRIDGE_COMPACT_EVERY: '0', TEST_EVENTS: eventsFile, ...extra },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -67,8 +71,99 @@ async function fixture(t, extra = {}) {
     if (child.exitCode !== null) assert.fail(logs);
     try { return (await fetch(base + '/health')).ok; } catch { return false; }
   });
-  return { post, events, logs: () => logs };
+  return { post, health: () => fetch(base + '/health').then(r => r.json()), events, logs: () => logs,
+    audit: () => fs.existsSync(path.join(dir, 'audit.jsonl'))
+      ? fs.readFileSync(path.join(dir, 'audit.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [],
+    activeFile: path.join(dir, '.dsh-phone/active-task.json'),
+    auditFile: path.join(dir, 'audit.jsonl'),
+    context: () => JSON.parse(fs.readFileSync(path.join(dir, '.dsh-phone/active-task.json'), 'utf8')) };
 }
+
+test('do reply carries allowlisted summary and capability-guarded private report', async t => {
+  const f = await fixture(t);
+  const result = await f.post('/do', { goal: 'synthetic-report' });
+  assert.equal(result.ok, true);
+  assert.equal(result.report_summary.lines.length, 3);
+  assert.equal(result.report_summary.evidence_incomplete, false);
+  assert.equal(f.context().state, 'closed');
+  assert.equal(f.events().find(event => event.event === 'start').activeFile, f.activeFile);
+  assert.equal(f.events().find(event => event.event === 'start').auditFile, f.auditFile);
+  const full = await f.post('/report', { task_id: A, report_token: result.report_token });
+  assert.equal(full.ok, true);
+  assert.equal(full.report.task.task_id, A);
+  assert.equal(full.report.task.goal_verified, false);
+  assert.equal(full.report.task.outcome, 'unknown');
+  const markdown = await f.post('/report', { task_id: A, report_token: result.report_token, format: 'markdown' });
+  assert.equal(markdown.ok, true);
+  assert.match(markdown.markdown, /执行报告/);
+  const denied = await f.post('/report', { task_id: B, report_token: result.report_token });
+  assert.equal(denied.ok, false);
+  assert.equal(denied.error, 'report_not_found');
+});
+
+test('native do reports web ownership distinctly and does not poison the ledger', async t => {
+  const f = await fixture(t);
+  const web = new ActiveTask(f.activeFile).activate(C, undefined, 'web');
+  const blocked = await f.post('/do', { goal: 'synthetic-report' });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.error, 'active_task_busy_web');
+  assert.match(blocked.message, /网页任务/);
+  assert.equal(f.audit().some(row => row.kind === 'report_task_start'), false);
+  assert.equal(new ActiveTask(f.activeFile).snapshot().generation, web.generation);
+  new ActiveTask(f.activeFile).close(C, web.generation, 'web');
+  assert.equal((await f.post('/do', { goal: 'synthetic-report' })).ok, true);
+});
+
+test('damaged local report state does not prevent bridge health', async t => {
+  const f = await fixture(t, { TEST_BAD_ACTIVE: '1', TEST_BAD_REPORTS: '1' });
+  assert.equal(f.events().length, 0);
+  assert.match(f.logs(), /active_task_unavailable/);
+  assert.match(f.logs(), /report_store_unavailable/);
+});
+
+test('health responds while an asynchronous report is being generated', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsb-slow-python-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const wrapper = path.join(dir, 'python');
+  fs.writeFileSync(wrapper, '#!/bin/sh\nsleep 0.5\nexec python3 "$@"\n', { mode: 0o700 });
+  const f = await fixture(t, { BRIDGE_PYTHON: wrapper });
+  const pending = f.post('/do', { goal: 'synthetic-report' });
+  await until(() => f.audit().some(row => row.kind === 'report_task_end'));
+  const started = Date.now();
+  assert.equal((await f.health()).ok, true);
+  assert.ok(Date.now() - started < 300, 'health must not wait for the report subprocess');
+  assert.equal((await pending).ok, true);
+});
+
+test('cancel seals active generation before the next task starts', async t => {
+  const f = await fixture(t);
+  const first = f.post('/do', { goal: 'hang' });
+  await until(() => f.events().some(e => e.text === 'hang'));
+  const old = f.context();
+  assert.equal(old.state, 'active');
+  assert.equal(old.task_id, A);
+  assert.equal((await f.post('/cancel')).stop_confirmed, true);
+  const stoppedReply = await bounded(first);
+  assert.equal(stoppedReply.ok, false);
+  assert.equal(stoppedReply.report_token, undefined);
+  assert.equal(f.audit().filter(row => row.task_id === A && row.kind === 'report_task_end')[0].terminal_status,
+    'cancelled');
+  assert.equal(f.context().state, 'closed');
+  assert.equal((await f.post('/do', { task_id: B, goal: 'fresh' })).ok, true);
+  assert.notEqual(f.context().generation, old.generation);
+  assert.equal(f.context().state, 'closed');
+});
+
+test('repeat confirmed cancel seals a matching leftover generation', async t => {
+  const f = await fixture(t);
+  const first = f.post('/do', { goal: 'hang' });
+  await until(() => f.events().some(e => e.text === 'hang'));
+  assert.equal((await f.post('/cancel')).stop_confirmed, true);
+  await first;
+  fs.writeFileSync(f.activeFile, JSON.stringify({ ...f.context(), state: 'active' }), { mode: 0o600 });
+  assert.equal((await f.post('/cancel')).stop_confirmed, true);
+  assert.equal(f.context().state, 'closed');
+});
 
 for (const text of ['任务已完成', '执行失败，需要人工处理']) {
   test('reply is not goal evidence: ' + text, async t => {
@@ -98,6 +193,7 @@ for (const text of ['', ' \n\t ']) {
     assert.equal(result.goal_status, 'unverified');
     assert.equal(result.goal_verified, false);
     assert.equal(result.error, 'Empty assistant reply');
+    assert.equal(result.report_token, undefined);
   });
 }
 
