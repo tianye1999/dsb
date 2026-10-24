@@ -35,14 +35,14 @@
 - **G5 留证**：动作前后截图 + 审计
 - **R3 派发前复核**：派发前现拍一帧，与凭据帧比对目标所在行，变了就拒绝
 
-这些检查不是“整个系统全部 fail-closed”的保证。命令层的 TypeSafe 钩子还存在服务不可用时的 fail-open 分支，见下文数据流。闸门改动规则见 [CONTRIBUTING.zh-CN.md](../CONTRIBUTING.zh-CN.md)。
+这些检查不是“整个系统全部 fail-closed”的保证。命令层的 TypeSafe 钩子启用后，还存在服务不可用时的 fail-open 分支，见下文数据流。闸门改动规则见 [CONTRIBUTING.zh-CN.md](../CONTRIBUTING.zh-CN.md)。
 
 ### 2. 隐私 → 按路径说明外发与本机留存
 
 - **闸门复核与视觉定位**：复核只发目标附近裁剪图，定位只发指定区域裁剪图；这不是整个大脑的裁剪图保证。依据：[复核裁剪](../agent/vision_check.py#L36)、[定位裁剪](../agent/vision_check.py#L114)。
 - **整屏问答与模型 API**：「问 DSH」将整屏截图、控件树、最近通知交给大脑；API 模式直接上传整屏到默认的 DeepSeek API，dsh 路径被引导用 `read_image` 读取完整截图。dsh 内部图片传输实现不在本仓库，不能承诺只外发裁剪图；任务与页面文本也可能进入云端模型。依据：[App 问答输入](../app/src/com/dsb/assistant/OverlayService.java#L2273)、[问答桥接](../bridge/bridge.mjs#L548)、[API 上传](../bridge/bridge.mjs#L144)、[dsh 看图入口](../bridge/bridge.mjs#L170)。
 - **DSH 完整会话日志**：三个公开 profile 的补丁均关闭 `session-log-deepseek.enabled`（上游默认 true，开启时随 DeepSeek 官方 API 请求上传完整会话事件）。重新开启会补传关闭期间积累的事件，不应把临时关闭当作数据删除。补丁优先于网页表单；安装和副本同步均保留 false。另一路 `session-telemetry-otel` 默认 `FEEDBACK_ONLY`，只有主动消息赞/踩或会话反馈才授权上传该会话日志，已有反馈授权也可能在后续装载时重放。逗沙包 web 停用对应 UI，不封禁底层反馈 API，也不改变普通模型请求的数据流。更多菜单反馈打开干净的 GitHub Issues 地址，公开内容仍需人工脱敏。`desktop-product-telemetry` 只对名为 desktop 的 profile 开启，手机 web / phone / headless 不启用。用 `dsh --profile <p> --dump-config` 核对生效值。
-- **TypeSafe 云端判定**：配置 Key 后，命中可疑特征的 shell 命令片段（最多 1500 字符）、工具名称、命中特征会发给 TypeSafe；服务不可用时该命令钩子按 fail-open 放行，不替代屏幕闸门。依据：[判定输入](../agent/check_gate.py#L151)、[服务地址与密钥读取](../agent/jev_client.py#L23)、[不可用时放行](../agent/check_gate.py#L162)。
+- **TypeSafe 云端判定**：启用可选命令钩子并配置 Key 后，命中可疑特征的 shell 命令片段（最多 1500 字符）、工具名称、命中特征会发给 TypeSafe；服务不可用时该钩子按 fail-open 放行，不替代屏幕闸门。安装器默认不启用命令钩子（`hooks-cc` / `check_gate.py`）；仓库带有 `dsh-config/cordis.patch.web.yml` 等可选模板。在 proot 中启用时，钩子执行器需要可用的沙箱或服务级完全访问（例如服务环境 `DSH_PERMISSION_MODE=danger-full-access`，它也会改变服务级审批默认），否则钩子不会运行。依据：[安装器复制 profile](../install.sh#L143)、[安装器默认补丁](../installer/cordis.patch.yml#L2)、[可选 web 模板](../dsh-config/cordis.patch.web.yml#L35)、[判定输入](../agent/check_gate.py#L151)、[服务地址与密钥读取](../agent/jev_client.py#L23)、[不可用时放行](../agent/check_gate.py#L162)。
 - **剪贴板回执**：写入回执只记操作、成功与否、长度等元数据，不记剪贴板原文；粘贴后会尝试清空并核验清空回执，不应把尝试当作必然成功。依据：[回执核验](../agent/safe_tap.py#L2233)、[粘贴与清空](../agent/safe_tap.py#L2252)。
 - **截图与审计会落盘**：动作前后截图和问答截图在本机留存，不能声称“数据不落盘”；审计写入没有统一脱敏，`note` / `expect` / 视觉解释可能携带聊天、订单等原文，不能承诺零原文日志。分享前须检查敏感内容。依据：[截图与动作记录](../agent/safe_tap.py#L1943)、[审计直接序列化](../agent/safe_tap.py#L369)、[问答截图落盘](../bridge/bridge.mjs#L87)。
 - 熟路笔记**应**只记路径和页面特征；这是使用约定，不是自动脱敏保证，也需按本机敏感文件管理。

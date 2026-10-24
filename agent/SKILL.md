@@ -17,7 +17,7 @@ description: 操控这台 Android 手机时必读（触发词：点/滑/截图/�
 2. **先 look 拿凭据，再动作，点完必须复核**（看 JSON 的 ui_reacted / activity_after，别只看 rc）。
 3. **发中文**用 `safe_tap.py type --shot ID --text "中文" [--clear] [--display N]`（App 写剪贴板 → KEYCODE_PASTE 279 → 清空剪贴板（clearPrimaryClip），写入与清空都以 App 回执 clip-<nonce>.json（不含原文）确认，没确认不发按键；过闸门；输入框要先点获焦；**不含回车/发送**，含换行直接拒绝；会覆盖你原来的剪贴板内容）。输出 readback=seen/not_seen 只是提示，clipboard_cleared=false 要人工检查（输入框常只露尾部）。旧「四步法」用裸 input，已被 adbq 拦截。
 4. **坐标换算**：预览截图坐标 ≠ 设备像素。用 safe_tap.py coord（自动换算 + 报 zone_hit/edge_hit）。
-5. **危险红线**：登录页/验证码/锁屏/「退出登录·删除·卸载·支付」→ 立刻停手报告。授权类弹窗**只检测不代点**（look 的 interruption_hint 会提醒你）。
+5. **危险红线**：登录页/验证码/锁屏/「退出登录·删除·卸载·支付」→ 立刻停手报告。遇登录页/验证码，停手前先跑 `python3 /root/.dsh-phone/skills/safe_tap.py recover --situation login_required` 登记一处人工接管；授权类弹窗先跑 `python3 /root/.dsh-phone/skills/safe_tap.py recover --situation dialog` 登记后停手，**只检测不代点**（look 的 interruption_hint 会提醒你）。这两种 recover 不点不输入，返回 rc=2 是预期停手，不要当失败重试；同一任务只登记一次。登记关联到本轮任务时，执行报告会计入一处「需要你接管」。
 
 ## 命令速查（python3 /root/.dsh-phone/skills/safe_tap.py …）
 

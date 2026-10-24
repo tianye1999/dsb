@@ -108,7 +108,7 @@ OCR 可能漏读，视觉也可能判断错。空控件树页的 OCR 不可用�
 
 ### TypeSafe 是另一条可选的云端判定路径
 
-配置 TypeSafe Key 后，命中可疑特征的 shell 命令片段（最多 1500 字符）、工具名称和命中特征会交给 TypeSafe 云端服务判定；该命令钩子在服务不可用时按 fail-open 放行，不替代屏幕执行闸门。依据：[判定输入](agent/check_gate.py#L151)、[服务地址与密钥读取](agent/jev_client.py#L23)、[不可用时放行](agent/check_gate.py#L162)。
+命令钩子可选，安装器默认不启用。启用钩子并配置 TypeSafe Key 后，命中可疑特征的 shell 命令片段（最多 1500 字符）、工具名称和命中特征会交给 TypeSafe 云端服务判定；服务不可用时钩子按 fail-open 放行，不替代屏幕执行闸门。依据：[安装器默认补丁](installer/cordis.patch.yml#L2)、[判定输入](agent/check_gate.py#L151)、[服务地址与密钥读取](agent/jev_client.py#L23)、[不可用时放行](agent/check_gate.py#L162)。
 
 ### DSH 会话日志上传与反馈不是同一条路径
 

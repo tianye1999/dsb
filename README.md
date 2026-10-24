@@ -108,7 +108,7 @@ Gate vision checks send target-area crops; localization sends a crop of the requ
 
 ### TypeSafe adds an optional cloud-review path
 
-With a TypeSafe Key configured, suspicious shell-command excerpts (up to 1500 characters), the tool name and matched risk hints go to TypeSafe's cloud service. This command hook fails open if the service is unavailable; it does not replace screen execution gates. Evidence: [review input](agent/check_gate.py#L151), [endpoint and key loading](agent/jev_client.py#L23), [unavailable-service behavior](agent/check_gate.py#L162).
+The command hook is optional and not enabled by the installer by default. When it is enabled and a TypeSafe Key is configured, suspicious shell-command excerpts (up to 1500 characters), the tool name and matched risk hints go to TypeSafe's cloud service. The hook fails open if the service is unavailable; it does not replace screen execution gates. Evidence: [default installer patch](installer/cordis.patch.yml#L2), [review input](agent/check_gate.py#L151), [endpoint and key loading](agent/jev_client.py#L23), [unavailable-service behavior](agent/check_gate.py#L162).
 
 ### Session-log uploads and feedback are separate paths
 
