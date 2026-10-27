@@ -57,6 +57,19 @@ test('turn-tail card renders fixed fields and warnings but never free text', asy
   const button = card.props.children.find(child => child?.type === 'button');
   button.props.onClick();
   assert.match(textOf(f.render()), /点击 · 已拒绝 · 无法确认危险按钮/);
+  const links = [];
+  const visit = node => {
+    if (!node || typeof node !== 'object') return;
+    if (node.type === 'a') links.push(node);
+    const children = node.props?.children;
+    (Array.isArray(children) ? children : [children]).forEach(visit);
+  };
+  visit(f.render());
+  assert.equal(links.length, 2);
+  assert.equal(links[0].props.download, true);
+  assert.equal(links[0].props.href, '/dsb-report/api/export?session=session-a&turn=1');
+  assert.equal(links[1].props.href, '/dsb-report/api/export?session=session-a&turn=1&shots=1');
+  assert.match(textOf(f.render()), /截图里的画面内容不会自动脱敏/);
 });
 
 test('pure question with no action has no execution report card', async () => {

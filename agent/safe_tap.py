@@ -69,6 +69,10 @@ import sys
 import tempfile
 import time
 try:
+    import shot_retention
+except Exception:
+    shot_retention = None
+try:
     import task_context
 except ImportError:
     task_context = None
@@ -941,17 +945,40 @@ def _observation_failure(stage, result):
 def cmd_look(a):
     load_state()  # Refuse corrupt state before reading any device surface.
     cancel_check = _ocr_cancel_check()
+    saved_paths = []
     with lock():
+        previous_path = (load_state().get("last_shot") or {}).get("path")
         if cancel_check():
             return _observation_failure("cancelled", {"status": "cancelled", "rows": []})
-        return _look_locked(a, cancel_check)
+        rc = _look_locked(a, cancel_check, saved_paths)
+    if saved_paths:
+        _prune_after_look({previous_path, saved_paths[-1]} - {None})
+    return rc
+
+
+def _audit_shot_retention(result):
+    if result.get("deleted", 0) or result.get("errors", 0) or result.get("skipped_reason") is None:
+        audit({"kind": "shot_retention", "deleted": result.get("deleted", 0),
+               "bytes": result.get("bytes", 0), "kept": result.get("kept", 0),
+               "errors": result.get("errors", 0), "truncated": bool(result.get("truncated", False))})
+
+
+def _prune_after_look(protect):
+    try:
+        result = shot_retention.prune_shots(SHOTS, protect=protect)
+    except Exception:
+        result = {"errors": 1, "skipped_reason": "error"}
+    try:
+        _audit_shot_retention(result)
+    except Exception:
+        pass
 
 
 def _target_key(text):
     return "".join(text.split()).casefold()
 
 
-def _look_locked(a, cancel_check):
+def _look_locked(a, cancel_check, saved_paths):
     target = getattr(a, "target", None)
     if target is not None:
         target = target.strip()
@@ -991,6 +1018,7 @@ def _look_locked(a, cancel_check):
         if not path:
             return _observation_failure("capture_failed", {"status": "not_run", "rows": []})
         src, obs = "screencap", None
+    saved_paths.append(path)
     # 虚拟屏：观测必须与请求同屏、帧尺寸等于会话尺寸、亮屏、非黑图、前台可确认。
     if display_id != 0:
         got_did = int((obs or {}).get("displayId", -1))
@@ -2574,8 +2602,47 @@ def cmd_open(a):
             return finish(3, "unknown" if submitted else "failed", type(exc).__name__)
 
 
+def _retention_days_arg(raw):
+    try:
+        days = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError("--days must be an integer from 1 to 365") from None
+    if not 1 <= days <= 365:
+        raise argparse.ArgumentTypeError("--days must be an integer from 1 to 365")
+    return days
+
+
+def cmd_prune_shots(a):
+    if shot_retention is None:
+        print("shot_retention module unavailable", file=sys.stderr)
+        return 3
+    try:
+        current_path = (load_state(strict=False).get("last_shot") or {}).get("path")
+        result = shot_retention.prune_shots(SHOTS, days=a.days, dry_run=a.dry_run,
+                                            throttle=False, protect={current_path} - {None})
+    except Exception:
+        result = {"deleted": 0, "bytes": 0, "kept": 0, "errors": 1,
+                  "skipped_reason": "error", "truncated": False, "scanned": 0}
+    if not a.dry_run:
+        try:
+            _audit_shot_retention(result)
+        except Exception:
+            pass
+    print(json.dumps({**result, "dry_run": a.dry_run,
+                      "mb": round(result["bytes"] / (1024 * 1024), 2)}, ensure_ascii=False))
+    return 0 if result["skipped_reason"] is None and result["errors"] == 0 else 3
+
+
 def cmd_doctor(a):
     """体检：adb/授权/亮屏锁屏/无障碍服务/观测通道——每项附下一步该做什么。"""
+    usage = shot_retention.directory_usage(SHOTS) if shot_retention else None
+    if usage is None:
+        print("截图目录  统计不可用")
+    else:
+        oldest = "-" if usage["oldest_days"] is None else "%.1f" % usage["oldest_days"]
+        print("截图目录  %d 文件, %.1f MB, 最旧 %s 天, 扫描错误 %d%s" %
+              (usage["files"], usage["bytes"] / (1024 * 1024), oldest,
+               usage["errors"], ", 统计已截断" if usage["truncated"] else ""))
     rows = []
     def add(name, ok, msg=""):
         rows.append((name, bool(ok), str(msg)[:100]))
@@ -2977,6 +3044,12 @@ if __name__ == "__main__":
 
     q = sub.add_parser("doctor", help="体检：adb/授权/亮屏锁屏/无障碍服务/观测通道")
     q.set_defaults(fn=cmd_doctor)
+
+    q = sub.add_parser("prune-shots", help="清理过期截图（不影响审计日志）")
+    q.add_argument("--days", type=_retention_days_arg, default=None,
+                   help="保留天数 1-365；默认读取 DSB_SHOT_RETENTION_DAYS")
+    q.add_argument("--dry-run", action="store_true", help="只统计将清理的截图")
+    q.set_defaults(fn=cmd_prune_shots)
 
     def _c_orange(a):
         _ball("橙"); print("🟠 球→橙（含分析期间；20 秒无心跳自动回蓝）"); return 0

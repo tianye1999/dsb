@@ -54,6 +54,8 @@ Follow the script step by step; system settings pages that can be opened directl
 
 **Read doctor results separately**: `DOCTOR_FAIL` means a required item is not met. `ADB not hardened` (shown as 「ADB 未加固」 in the installer output) is a security warning for a skipped preflight or a rollback; on its own it does not make an otherwise healthy DSB fail. "Hardened but check failed" fails strictly and is never downgraded to ordinary ADB.
 
+`safe_tap.py doctor` also reports screenshot-directory usage. In the installed directory containing `safe_tap.py` (for example `/root/.dsh-phone/skills` on the maintainer's phone), run `python3 safe_tap.py prune-shots --dry-run` to inspect or `python3 safe_tap.py prune-shots` to clean expired screenshots; `--days N` overrides the default 3-day retention (1-365 days). Audit logs are not pruned, but their historical screenshot paths may no longer resolve.
+
 ## Device-specific values: what needs adjusting
 
 **With the installer you do not need to edit any device identifier or ADB selector by hand.** The following values are detected on your device or generated on the spot, never copied from the maintainer's device:

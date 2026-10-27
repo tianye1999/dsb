@@ -121,6 +121,7 @@ OCR 可能漏读，视觉也可能判断错。空控件树页的 OCR 不可用�
 
 另一条 `session-telemetry-otel` 路径默认是 `FEEDBACK_ONLY`：只有主动提交消息赞/踩或会话反馈，才授权把该会话日志发给 DeepSeek；不是日常自动上传，但已有反馈会话可在后续装载时重放。逗沙包 web 停用该消息反馈 UI（含 `/feedback` 表单），不声称停用了底层所有反馈接口。
 “更多 → 意见反馈”改为打开 [逗沙包 GitHub Issues](https://github.com/tianye1999/dsb/issues)，不会自动附带会话、账号或设备信息；公开发帖前仍需自行去除敏感内容。
+网页对话的执行报告可以下载脱敏的反馈材料包；默认不含截图，含截图时画面内容不会自动脱敏。公开发帖前请检查材料包。
 `desktop-product-telemetry` 只在 profile 名为 `desktop` 时启用，手机使用的 web / phone / headless 不启用它；这不代表以上其他路径被一并关闭。
 实现依据为固定的 [DSH 0.2.1-rc.2 发布包](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.2.1-rc.2)；用 `dsh --profile <p> --dump-config` 核对生效值。
 
