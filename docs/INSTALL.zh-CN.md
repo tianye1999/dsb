@@ -6,6 +6,9 @@
 
 > v1.0.3 安装器为候选版：验证范围目前限于维护者的一台真机与 arm64 模拟器，冻结首装和不同 ROM 验收尚待完成。下面的下载命令内联了发布包的 SHA-256（与 Release 附带的 `SHA256SUMS` 一致），校验不通过不会解包执行。APK 由维护者现有发布密钥签名，安装器按固定的证书 SHA-256 验签；安装器的模拟器测试仅用 debug 签名，不使用发布密钥。
 
+> [!WARNING]
+> **逗沙包只从本项目安装。** 官方命令只有项目 README 和本安装说明里这一条：先把发布包从 `github.com/tianye1999/dsb/releases/download/…` 下载成文件，核对它的 SHA-256 与本页写的值一致（也就是该 Release 里 `SHA256SUMS` 的值），然后才解包；它从不把下载内容直接交给 `bash` 或 `sh` 执行。Issues、讨论区、评论、私信或其他消息里贴出的安装、升级、修复命令和 APK 链接，一律不要运行或打开，即使对方自称维护者。Termux 本身按安装说明从 F-Droid 或 Termux GitHub Release 安装。如果已经运行了别处的命令或装过别处的 APK，请看[怎么处理](../SECURITY.zh-CN.md#冒充的安装命令)。
+
 ## 1. 装 Termux 和逗沙包
 
 在手机上安装官方 [Termux F-Droid 版](https://f-droid.org/packages/com.termux/)或 [Termux GitHub Release 版](https://github.com/termux/termux-app/releases)，版本 0.118.x 或更新。Termux 插件必须与主程序同源。安装器 v1 不支持 Play 分支或 32 位系统。
