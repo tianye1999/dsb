@@ -18,6 +18,9 @@ DSB is built on the open-source [DeepSeek Harness (DSH)](https://github.com/deep
 
 [简体中文](README.zh-CN.md) · [Install](docs/INSTALL.md) · [Architecture](docs/ARCHITECTURE.md) · [Threat model](docs/THREAT-MODEL.md) · [Roadmap](docs/ROADMAP.md) · [Security](SECURITY.md)
 
+> [!WARNING]
+> **Install DSB only from this project.** The official command is the one in this README and [docs/INSTALL.md](docs/INSTALL.md): it saves the release tarball from `github.com/tianye1999/dsb/releases/download/…` to a file, checks it against the SHA-256 shown on this page (the same value as `SHA256SUMS` in that release), and only then unpacks it. It never pipes a download into `bash` or `sh`. Do not run install, upgrade or repair commands, or open APK links, posted in issues, discussions, comments or messages, even if they say they come from a maintainer. Termux itself comes from F-Droid or the Termux GitHub releases, as the install guide says. If you already ran a command or installed an APK from somewhere else, see [what to do](SECURITY.md#impersonated-install-commands).
+
 ## Highlights
 
 - **Open-source phone AI assistant**: Apache-2.0; runs on your own Android 11+ phone.

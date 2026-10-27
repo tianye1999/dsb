@@ -6,6 +6,9 @@ No root and no computer connection are needed. Requirements: Android 11+, 64-bit
 
 > The v1.0.3 installer is a candidate: validation so far is limited to the maintainer's device and an arm64 emulator; frozen first-install and other-ROM acceptance are still pending. The download command below pins the release tarball's SHA-256 (matching `SHA256SUMS` in the release); nothing is unpacked or run if it does not match. The APK is signed with the maintainer's existing release key, and the installer checks it against a pinned certificate SHA-256. The installer's emulator tests use a debug signature only, never the release key.
 
+> [!WARNING]
+> **Install DSB only from this project.** The official command is the one in the project README and this guide: it saves the release tarball from `github.com/tianye1999/dsb/releases/download/…` to a file, checks it against the SHA-256 shown on this page (the same value as `SHA256SUMS` in that release), and only then unpacks it. It never pipes a download into `bash` or `sh`. Do not run install, upgrade or repair commands, or open APK links, posted in issues, discussions, comments or messages, even if they say they come from a maintainer. Termux itself comes from F-Droid or the Termux GitHub releases, as the install guide says. If you already ran a command or installed an APK from somewhere else, see [what to do](../SECURITY.md#impersonated-install-commands).
+
 ## 1. Install Termux and DSB
 
 Install the official [Termux F-Droid build](https://f-droid.org/packages/com.termux/) or the [Termux GitHub release](https://github.com/termux/termux-app/releases), version 0.118.x or later. Termux plugins must come from the same source as the main app. Installer v1 does not support the Play Store build or 32-bit systems.

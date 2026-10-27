@@ -18,6 +18,9 @@
 
 [English](README.md) · [安装](docs/INSTALL.zh-CN.md) · [架构](docs/ARCHITECTURE.zh-CN.md) · [威胁模型](docs/THREAT-MODEL.zh-CN.md) · [路线图](docs/ROADMAP.zh-CN.md) · [安全策略](SECURITY.zh-CN.md)
 
+> [!WARNING]
+> **逗沙包只从本项目安装。** 官方命令只有本 README 和[安装说明](docs/INSTALL.zh-CN.md)里这一条：先把发布包从 `github.com/tianye1999/dsb/releases/download/…` 下载成文件，核对它的 SHA-256 与本页写的值一致（也就是该 Release 里 `SHA256SUMS` 的值），然后才解包；它从不把下载内容直接交给 `bash` 或 `sh` 执行。Issues、讨论区、评论、私信或其他消息里贴出的安装、升级、修复命令和 APK 链接，一律不要运行或打开，即使对方自称维护者。Termux 本身按安装说明从 F-Droid 或 Termux GitHub Release 安装。如果已经运行了别处的命令或装过别处的 APK，请看[怎么处理](SECURITY.zh-CN.md#冒充的安装命令)。
+
 ## 亮点
 
 - **开源手机 AI 助手**：Apache-2.0，装在你自己的 Android 11+ 手机上。
