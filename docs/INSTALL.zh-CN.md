@@ -54,6 +54,8 @@ Ubuntu 官方软件源使用 HTTPS；最小镜像缺少 CA 时，先使用 Termu
 
 **doctor 结果要分开看**：`DOCTOR_FAIL` 表示有必需项未满足；`ADB 未加固` 是预检跳过/已回滚的安全警告，不会单独让其余正常的 DSB 失败。出现“已加固但检查失败”则严格失败，不降级为普通 ADB。
 
+`safe_tap.py doctor` 也显示截图目录占用。在安装后存放 `safe_tap.py` 的目录（维护者手机上例如 `/root/.dsh-phone/skills`），运行 `python3 safe_tap.py prune-shots --dry-run` 查看或 `python3 safe_tap.py prune-shots` 清理过期截图；`--days N` 可覆盖默认的 3 天保留期（1–365 天）。审计日志不会被清理，但历史截图路径可能失效。
+
 ## 设备相关数值：哪些需要调整
 
 **使用安装器时，不需要手改设备标识或 ADB 选择器。** 以下值由本机探测或现场生成，不从维护者设备复制：

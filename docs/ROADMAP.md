@@ -25,7 +25,7 @@ Everything below is **planned, not implemented**, and is not a privacy or securi
 
 - [ ] **Make full-screen questions crop-first, or allow turning off full-frame uploads**: this must cover "Ask DSH" and the model-call paths, not just the gate's cropping logic; the current full-frame path is in [`bridge/bridge.mjs`](../bridge/bridge.mjs#L548).
 - [ ] **Refuse empty-tree taps when the vision service fails**: remove the fallback that approves when OCR found no danger words; the current branch is in [`agent/safe_tap.py`](../agent/safe_tap.py#L1516).
-- [ ] **Redact free-text audit fields**: cover `note` / `expect` / vision explanations and similar fields, then verify that chat, order and other sensitive text is not carried in; records are currently serialized directly by [`audit()`](../agent/safe_tap.py#L369).
+- [ ] **Redact free-text audit fields**: cover `note` / `expect` / vision explanations and similar fields, then verify that chat, order and other sensitive text is not carried in; records are currently serialized directly by [`audit()`](../agent/safe_tap.py#L369). Feedback ZIP exports are redacted separately; this does not change local audit writes.
 
 ## Other ideas
 

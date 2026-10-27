@@ -11,6 +11,7 @@ const generated = [
   `    const RESULTS = ${JSON.stringify(vocabulary.results)};`,
   `    const REASONS = ${JSON.stringify(vocabulary.reasons)};`,
   `    const GATE_CODES = new Set(${JSON.stringify(vocabulary.gate_reason_codes)});`,
+  `    const FEEDBACK_EXPORT = ${JSON.stringify(vocabulary.feedback_export)};`,
 ].join('\n');
 const next = source.replace(/    const ACTIONS = [\s\S]*?    const number = /,
   generated + '\n    const number = ');

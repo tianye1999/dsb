@@ -33,9 +33,13 @@ test('report route uses real DSH Connection cookie, Host and Origin checks', opt
   await connectionPlugin.apply(root, {});
   const store = new TaskReportStore({ dir: path.join(dir, 'reports'), audit: path.join(dir, 'audit.jsonl'),
     script: path.resolve('agent/task_report.py') });
-  let route;
+  let route, exportRoute;
   const ctx = { connection: root.connection, logger: { warn() {} }, on() {},
-    effect(fn) { return fn(); }, webServer: { register(value) { route = value; return () => {}; } } };
+    effect(fn) { return fn(); }, webServer: { register(value) {
+      if (value.path.endsWith('/export')) exportRoute = value;
+      else route = value;
+      return () => {};
+    } } };
   const { turns } = createWebReport(ctx, { store, ledger: path.join(dir, 'reports/web-turns.json'),
     activeFile: path.join(dir, 'active-task.json') });
   const row = turns.start('synthetic-session', 1);
@@ -67,4 +71,12 @@ test('report route uses real DSH Connection cookie, Host and Origin checks', opt
   assert.equal(call({ cookie: valid, host: 'evil.invalid' }).status, 403);
   assert.equal(call({ cookie: valid, origin: 'https://evil.invalid' }).status, 403);
   assert.equal(call({ cookie: cookie(31 * 86400000) }).status, 401);
+  const exportUrl = '/dsb-report/api/export?session=synthetic-session&turn=1';
+  const exported = response();
+  await exportRoute.handler(request({cookie: valid}, exportUrl), exported);
+  assert.equal(exported.status, 200);
+  assert.equal(exported.headers['Content-Type'], 'application/zip');
+  const crossSite = response();
+  await exportRoute.handler(request({cookie: valid, origin: 'https://evil.invalid'}, exportUrl), crossSite);
+  assert.equal(crossSite.status, 403);
 });

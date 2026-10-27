@@ -20,6 +20,11 @@
     "observed": "已观察", "unverified": "未核实", "failed": "操作未成功",
     "opened": "已打开"
   },
+  "feedback_export": {
+    "without_shots": "打包反馈材料（不含截图）",
+    "with_shots": "含截图打包",
+    "shot_warning": "截图里的画面内容不会自动脱敏，发出前请自己看一遍"
+  },
   "reasons": {
     "G1_NO_SHOT": "缺少当前画面凭据，已拒绝。",
     "G1_MISMATCH": "画面凭据不匹配，已拒绝。",
