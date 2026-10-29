@@ -3,11 +3,15 @@ name: release-provenance
 # Rebuild a release's installer tarball from public source, require it to be
 # byte-identical to the release asset and, on the release tag itself, attest
 # its build provenance. Release order: push the tag vX.Y.Z on the commit the
-# tarball was built from, create the draft release on that existing tag, then
+# tarball was built from, create the draft release on that existing tag with
+# dsb-installer.tar.gz and SHA256SUMS attached. The release referenced by
+# apk_url must carry the named APK (this draft or an older release). Then run
 #   gh workflow run release-provenance --repo tianye1999/dsb --ref vX.Y.Z -f tag=vX.Y.Z
 # and publish the release only after the Sigstore bundle is attached.
+# Do not replace draft release assets while this workflow is running.
 # With verify_only_ref set, the run only rebuilds that commit and compares; it
 # never attests, because the attestation would name the workflow's ref.
+# Both modes support draft APKs and reuse of APKs from older public releases.
 on:
   workflow_dispatch:
     inputs:
@@ -22,8 +26,72 @@ on:
 permissions: read-all
 
 jobs:
+  # Draft assets need write access. Never checkout or execute repository code
+  # here: read release.json only as data at the same commit build will use.
+  # Always use the release referenced by apk_url, for draft and public APKs;
+  # no anonymous curl fallback, so both paths have the same integrity gate.
+  # APK correctness is established by rebuilding a tarball byte-identical to
+  # the release asset: its installer/release.json records the APK's apk_sha256.
+  # The filename match alone is not proof; verify must pass before attesting.
+  fetch-apk:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write  # draft releases are only visible with write access
+    env:
+      TAG: ${{ inputs.tag }}
+      SOURCE_REF: ${{ inputs.verify_only_ref || github.sha }}
+      VERIFY_ONLY_REF: ${{ inputs.verify_only_ref }}
+    steps:
+      - name: fetch the APK pinned by the source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag must look like v1.2.3"; exit 1; }
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "source ref must be a full commit SHA"; exit 1; }
+          if [ -z "$VERIFY_ONLY_REF" ] && [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then
+            echo "to attest, push the tag first and run this workflow on it (--ref $TAG)"; exit 1
+          fi
+          # Must match the owner/repo allowed by the apk_url validation below.
+          [ "$GITHUB_REPOSITORY" = tianye1999/dsb ] || { echo "repository must match apk_url owner/repo: tianye1999/dsb"; exit 1; }
+          api_to_file() {
+            local output=$1 attempt
+            shift
+            # Initial attempt plus at most three retries; discard partial output.
+            for attempt in 0 1 2 3; do
+              if gh api "$@" > "$output"; then return 0; fi
+              if [ "$attempt" -lt 3 ]; then sleep 2; fi
+            done
+            return 1
+          }
+          api_to_file source-release.json "repos/$GITHUB_REPOSITORY/contents/installer/release.json?ref=$SOURCE_REF" \
+            -H "Accept: application/vnd.github.raw+json"
+          url=$(jq -er '.apk_url' source-release.json)
+          [[ "$url" =~ ^https://github\.com/tianye1999/dsb/releases/download/v[0-9.]+/DSB-[0-9.]+\.apk$ ]] || { echo "unexpected apk_url: $url"; exit 1; }
+          name=${url##*/}
+          apk_tag=${url%/*}
+          apk_tag=${apk_tag##*/}
+          [[ "$apk_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected APK release tag: $apk_tag"; exit 1; }
+          api_to_file releases.json --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[]'
+          [ "$(jq -s --arg tag "$TAG" '[.[] | select(.tag_name == $tag)] | length' releases.json)" = 1 ] || { echo "expected exactly one release for $TAG"; exit 1; }
+          jq --arg tag "$apk_tag" 'select(.tag_name == $tag)' releases.json > release.json
+          [ "$(jq -s length release.json)" = 1 ] || { echo "expected exactly one release for $apk_tag"; exit 1; }
+          id=$(jq -r --arg n "$name" '.assets[] | select(.name == $n) | .id' release.json)
+          [[ "$id" =~ ^[0-9]+$ ]] || { echo "release $apk_tag has no single asset named $name"; exit 1; }
+          mkdir -p apk
+          api_to_file "apk/$name" "repos/$GITHUB_REPOSITORY/releases/assets/$id" -H "Accept: application/octet-stream"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-apk
+          path: apk/*.apk
+          if-no-files-found: error
+          # Draft APKs become visible to repository readers via this artifact
+          # before the release is published; keep that exposure to one day.
+          retention-days: 1
+
   # Runs repository code, so it gets no token beyond read access.
   build:
+    needs: fetch-apk
     if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-24.04
     permissions:
@@ -58,11 +126,15 @@ jobs:
         run: |
           python3 -c 'import sys, zlib; print(sys.version); print("zlib", zlib.ZLIB_VERSION, zlib.ZLIB_RUNTIME_VERSION)'
           git --version
-      - name: download the APK the release pins
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-apk
+          path: apk
+      - name: use the APK the release pins
         run: |
           url=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["apk_url"])' src/installer/release.json)
           [[ "$url" =~ ^https://github\.com/tianye1999/dsb/releases/download/v[0-9.]+/DSB-[0-9.]+\.apk$ ]] || { echo "unexpected apk_url: $url"; exit 1; }
-          curl -fsSL --retry 3 "$url" -o app.apk
+          mv -- "apk/${url##*/}" app.apk
       - name: fetch the pinned NDK inputs for both architectures
         run: |
           python3 -I - src ndk-cache <<'PY'
