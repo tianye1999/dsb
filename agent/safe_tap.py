@@ -60,17 +60,20 @@ import argparse
 import base64
 import contextlib
 import fcntl
+import hashlib
 import io
 import json
 import math
 import os
 import re
 import shlex
+import stat
 import struct
 import subprocess
 import sys
 import tempfile
 import time
+import xml.etree.ElementTree as ET
 try:
     import shot_retention
 except Exception:
@@ -199,6 +202,7 @@ CONFIG_FILE = os.path.join(HERE, "safe_tap_config.json")
 CONFIG_DEFAULTS = {
     "batch.enabled": False,             # 批量动作必须显式开启
     "look.ttl": 90.0,                  # G1 凭据 TTL（秒）
+    "look.revisit_threshold": 8,       # 64-bit dHash distance; advisory only
     "action.settle_budget": 2.5,       # 动作后稳定轮询预算（秒）
     "action.settle_budget_fast": 1.2,  # --fast 档预算
     "action.fast_default": False,      # 不加 --fast 也按 fast 跑
@@ -383,12 +387,224 @@ def save_state(s):
                 pass
 
 
+def _incident_task():
+    fields = task_context.audit_fields() if task_context is not None else {}
+    return {key: fields.get(key) for key in ("task_id", "task_generation")}
+
+
+# Covers several short page loops without retaining an entire task's stale pages.
+LOOK_HISTORY_LIMIT = 20
+# A single task cannot plausibly need more than 100,000 explicit observations.
+LOOK_STEP_LIMIT = 100_000
+
+
+def _valid_dhash(value):
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{16}", value) is not None
+
+
+def _shot_dhash(path, shot_black=False):
+    """Read only the credential bitmap; never alter observation/gate evidence."""
+    if shot_black or not path:
+        return None
+    try:
+        from PIL import Image
+        with Image.open(path) as image:
+            original_height = image.height
+            # 4% = 96 px on a 2400 px screen: covers typical status-bar clocks.
+            top = math.ceil(original_height * .04)
+            if image.format == "JPEG":
+                image.draft("L", (72, 64))
+            # Round upward in decoded coordinates so excluded rows never leak in.
+            top = math.ceil(top * image.height / original_height)
+            if top >= image.height:
+                return None
+            small = image.crop((0, top, image.width, image.height)).convert("L").resize(
+                (9, 8), getattr(Image, "Resampling", Image).LANCZOS)
+            pixels = small.tobytes()
+            value = 0
+            for y in range(8):
+                for x in range(8):
+                    value = (value << 1) | (pixels[y * 9 + x] > pixels[y * 9 + x + 1])
+            return f"{value:016x}"
+    except Exception:
+        return None
+
+
+def _look_history(state, task):
+    """Discard the entire optional field on malformed or unbounded input."""
+    history = state.get("look_history")
+    if not isinstance(history, dict) or set(history) != {
+            "task_id", "task_generation", "step", "display_id", "entries"}:
+        return None
+    for key in ("task_id", "task_generation"):
+        value = history[key]
+        if value is not None and (not isinstance(value, str) or not 0 < len(value) <= 128):
+            return None
+        if value != task[key]:
+            return None
+    if (type(history["step"]) is not int or not 0 <= history["step"] < LOOK_STEP_LIMIT or
+            type(history["display_id"]) is not int or not 0 <= history["display_id"] < 2**31):
+        return None
+    entries = history["entries"]
+    if not isinstance(entries, list) or len(entries) > LOOK_HISTORY_LIMIT:
+        return None
+    previous_step, previous_ts = 0, 0
+    for row in entries:
+        if not isinstance(row, dict) or set(row) != {"step", "dhash", "display_id", "ts"}:
+            return None
+        if (type(row["step"]) is not int or not previous_step < row["step"] <= history["step"] or
+                not _valid_dhash(row["dhash"]) or type(row["display_id"]) is not int or
+                not 0 <= row["display_id"] < 2**31 or
+                type(row["ts"]) not in (int, float) or not 0 < row["ts"] < 1e12 or
+                row["ts"] < previous_ts):
+            return None
+        previous_step, previous_ts = row["step"], row["ts"]
+    if entries and history["step"] > entries[-1]["step"] + LOOK_HISTORY_LIMIT:
+        return None
+    return history
+
+
+def _prepare_look_hash(state, path, shot_black, display_id, consumed_at, *, internal=False):
+    """Compute optional fields without mutating or persisting credential state."""
+    dhash = _shot_dhash(path, shot_black)
+    if internal:
+        return dhash, None, None
+    task = _incident_task()
+    history = _look_history(state, task)
+    # Unknown identities cannot safely claim that two looks share a task.
+    if not (isinstance(task["task_id"], str) and 0 < len(task["task_id"]) <= 128 and
+            (task["task_generation"] is None or isinstance(task["task_generation"], str)
+             and 0 < len(task["task_generation"]) <= 128)):
+        return dhash, None, None
+    step = history["step"] + 1 if history else 1
+    entries = list(history["entries"]) if history else []
+    now = time.time()
+    threshold = cfg_get("look.revisit_threshold", 8)
+    if type(threshold) is not int or not 0 <= threshold <= 64:
+        threshold = 8
+    matches = []
+    if dhash:
+        for row in entries:
+            if row["display_id"] == display_id:
+                distance = (int(dhash, 16) ^ int(row["dhash"], 16)).bit_count()
+                if distance <= threshold:
+                    matches.append((row, distance))
+    hint = None
+    if matches:
+        latest, distance = matches[-1]
+        if latest["step"] == step - 1:
+            action_ts = state.get("last_action_ts", 0)
+            if (type(action_ts) in (int, float) and type(consumed_at) in (int, float)
+                    and latest["ts"] < action_ts <= now and action_ts > consumed_at):
+                hint = {"kind": "unchanged", "similar_to_step": latest["step"],
+                        "steps_ago": 1, "distance": distance}
+            # Repeated reads without an action are not evidence of a loop.
+        else:
+            hint = {"kind": "revisit", "similar_to_step": latest["step"],
+                    "steps_ago": step - latest["step"], "distance": distance,
+                    "times": len(matches)}  # Prior matching records, excluding this look.
+    if dhash:
+        entries.append({"step": step, "dhash": dhash, "display_id": display_id, "ts": now})
+    elif entries and step > entries[-1]["step"] + LOOK_HISTORY_LIMIT:
+        entries = []  # Long unobservable gaps make old hashes stale, not the task count.
+    history = {**task, "step": step, "display_id": display_id,
+               "entries": entries[-LOOK_HISTORY_LIMIT:]}
+    return dhash, history, hint
+
+
+def _revisit_hint(hint):
+    if hint is None:
+        return
+    if hint["kind"] == "unchanged":
+        print("上一步动作后画面几乎没变：上一步可能没生效，可先确认再尝试别的办法。", file=sys.stderr)
+    else:
+        print(f"当前画面与本任务第 {hint['similar_to_step']} 次 look（{hint['steps_ago']} 步前）几乎相同"
+              f"（此前已出现 {hint['times']} 次）。如果是有意返回（例如从详情回到列表）可忽略；"
+              "否则可能在兜圈，可换个思路，或停下说明情况。", file=sys.stderr)
+
+
+def _current_incident(state, task=None):
+    if task is None:
+        task = _incident_task()
+    incident = state.get("open_incident")
+    if isinstance(incident, dict) and all(
+            incident.get(key) == value for key, value in task.items()):
+        result = dict(incident)
+        category = result.get("r3_category")
+        if not isinstance(category, str) or category not in R3_CATEGORIES:
+            result.pop("r3_category", None)
+        return result
+    return None
+
+
+def _record_incident(rec, display_id=0, *, locked=True):
+    """Best-effort reminder after audit; never replace the original action outcome."""
+    try:
+        with contextlib.nullcontext() if locked else lock():
+            import task_report
+            code = rec.get("reason_code") or task_report.reason_code_for(rec)
+            if code not in task_report.EXPLANATIONS:
+                code = "OTHER_REFUSAL" if rec.get("allowed") is False else "OP_FAILED"
+            state = load_state()
+            task = _incident_task()
+            previous = _current_incident(state, task) or {}
+            now = time.time()
+            state["open_incident"] = {
+                "kind": "batch" if rec["kind"] == "batch_stop" else rec["kind"],
+                "reason_code": code, "consecutive": previous.get("consecutive", 0) + 1,
+                "first_ts": previous.get("first_ts", now), "last_ts": now,
+                "display_id": int(rec.get("display_id", display_id) or 0),
+                **task}
+            if rec.get("r3_category") in R3_CATEGORIES:
+                state["open_incident"]["r3_category"] = rec["r3_category"]
+            save_state(state)
+    except Exception:
+        print("open_incident 未保存：状态不可用", file=sys.stderr)
+
+
+def _clear_incident():
+    """Called under the action lock, separately from the required state update."""
+    try:
+        state = load_state()
+        if "open_incident" in state:
+            state.pop("open_incident")
+            save_state(state)
+    except Exception:
+        print("open_incident 未清除：状态不可用", file=sys.stderr)
+
+
+def _incident_hint(incident):
+    if incident:
+        label = {"tap": "点按", "type": "输入", "key": "按键", "swipe": "滑动",
+                 "scroll": "滚动", "long_press": "长按", "drag": "拖动",
+                 "open": "打开应用", "batch": "批量操作"}.get(incident["kind"], "动作")
+        print("上一个%s被拒或未确认生效（原因码 %s，连续 %s 次）：先换个办法，不要原样重试。" %
+              (label, incident["reason_code"], incident["consecutive"]), file=sys.stderr)
+        hint = {
+            "target_shifted": "目标可能已挪位，请重新 look 找到它，再按新位置重新决策。",
+            "target_occupied": "目标可能被遮挡，请先处理遮挡物或等待，再重新 look。",
+            "target_disappeared": "目标可能已离开页面，请重新 look 确认当前页面。",
+            "unclassified": "目标去向无法确认，请重新 look 后再决策。",
+        }.get(incident.get("r3_category"))
+        if hint:
+            print(hint, file=sys.stderr)
+
+
 _BATCH_CONTEXT = None
 _BATCH_RECORDS = None
 
 
 def audit(rec):
     rec = dict(rec)
+    if rec.get("kind") in {"tap", "swipe", "long_press", "drag", "scroll", "key", "type"}:
+        rec["shot_dhash"] = None
+        try:
+            credential = load_state().get("last_shot") or {}
+            value = credential.get("shot_dhash")
+            if rec.get("shot") == credential.get("id") and rec.get("shot") and _valid_dhash(value):
+                rec["shot_dhash"] = value
+        except Exception:
+            pass
     if _BATCH_CONTEXT is not None and rec.get("kind") == "tap":
         rec.update(_BATCH_CONTEXT)
     try:
@@ -744,7 +960,7 @@ def _save_observed_jpg(obs, dest):
 
 
 def observe(with_image=True, timeout=OBS_TIMEOUT, force=False, display_id=0,
-            foreground_out=None, cancel_check=None):
+            foreground_out=None, cancel_check=None, transport_timeout=None):
     """向逗沙包 App 要一次**原子观测**：截图 + 控件树 + 前台包名 + 时间戳，同一次调用产出。
 
     返回 dict；失败/超时返回 None —— 主屏调用方回退老的 screencap / uiautomator。
@@ -770,6 +986,9 @@ def observe(with_image=True, timeout=OBS_TIMEOUT, force=False, display_id=0,
     t0 = time.time()
     if not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout < 0:
         raise ValueError("invalid observation timeout")
+    if transport_timeout is not None and (not isinstance(transport_timeout, (int, float))
+            or not math.isfinite(transport_timeout) or transport_timeout <= 0):
+        raise ValueError("invalid observation transport timeout")
     script = _FILES_SH + _CLOCK_SH
     if cancel_check is not None:
         script += cancel_check.before_capture_shell()
@@ -800,7 +1019,7 @@ def observe(with_image=True, timeout=OBS_TIMEOUT, force=False, display_id=0,
         script += cancel_check.after_capture_shell()
     read_at = time.monotonic()
     try:
-        raw = _sh("exec-out", script, t=20 + timeout,
+        raw = _sh("exec-out", script, t=min(20 + timeout, transport_timeout) if transport_timeout is not None else 20 + timeout,
                   checked=True, binary=True, text_errors=False)
         if cancel_check is not None and raw.startswith(b"DSB_CANCELLED "):
             data, pos = _read_frame(raw, "CANCELLED")
@@ -878,26 +1097,54 @@ def _settle_stable(budget=2.5, interval=0.35, min_polls=2, display_id=0):
     return (round((time.time() - t0) * 1000), polls, False)
 
 
+class _IndexedNodes(list):
+    """The unchanged gate view plus raw nodes used only for the N1 sidecar."""
+    def __init__(self, nodes, index_nodes):
+        super().__init__(nodes)
+        self.index_nodes = index_nodes
+
+
 def dump_nodes_app():
     """只取控件树（不带图），比 uiautomator dump 快一个数量级。失败返回 None。"""
     d = observe(with_image=False)
-    return _nodes_from(d) if d is not None else None
+    return _IndexedNodes(_nodes_from(d), d.get("nodes") or []) if d is not None else None
+
+
+UI_XML_MAX_BYTES = 8 * 1024 * 1024
 
 
 def dump_nodes_uiautomator():
     """老路子：uiautomator dump + cat（1~2 秒）。只在 App 快照不可用时用。"""
     sh("shell", "uiautomator", "dump", "/sdcard/_safe.xml", t=90)
     xml = sh("shell", "cat", "/sdcard/_safe.xml", t=90)
-    out = []
-    for n in re.findall(r"<node[^>]*>", xml):
-        t = re.search(r'text="([^"]*)"', n)
-        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', n)
-        if t and b and t.group(1).strip():
-            x1, y1, x2, y2 = map(int, b.groups())
-            out.append({"text": t.group(1).strip(),
-                        "cx": (x1 + x2) // 2, "cy": (y1 + y2) // 2,
-                        "rect": [x1, y1, x2, y2]})
-    return out
+    try:
+        if (len(xml) > UI_XML_MAX_BYTES or len(xml.encode("utf-8")) > UI_XML_MAX_BYTES
+                or "<!DOCTYPE" in xml.upper() or "<!ENTITY" in xml.upper()):
+            return []
+        root = ET.fromstring(xml)
+        raw = []
+        for n in root.iter("node"):
+            b = re.fullmatch(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", n.get("bounds", ""))
+            if b:
+                raw.append({"rect": list(map(int, b.groups())),
+                            "text": n.get("text", "").strip(), "desc": n.get("content-desc", "").strip(),
+                            **{key: n.attrib[attr] for key, attr in
+                               (("cls", "class"), ("viewId", "resource-id")) if attr in n.attrib},
+                            **{key: n.get(attr) == "true" for key, attr in
+                               (("clickable", "clickable"), ("visibleToUser", "visible-to-user")) if attr in n.attrib}})
+        # Preserve origin/main's gate text verbatim, including XML entity spelling.
+        out = []
+        for n in re.findall(r"<node[^>]*>", xml):
+            t = re.search(r'text="([^"]*)"', n)
+            b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', n)
+            if t and b and t.group(1).strip():
+                x1, y1, x2, y2 = map(int, b.groups())
+                out.append({"text": t.group(1).strip(),
+                            "cx": (x1 + x2) // 2, "cy": (y1 + y2) // 2,
+                            "rect": [x1, y1, x2, y2]})
+        return _IndexedNodes(out, raw)
+    except Exception:
+        return []
 
 
 def dump_nodes():
@@ -1131,7 +1378,10 @@ def _observation_failure(stage, result):
     state = load_state()
     state.pop("last_shot", None)
     save_state(state)
-    print(json.dumps({"ok": False, "found": False, "error": stage, "ocr": result}, ensure_ascii=False))
+    incident = _current_incident(state)
+    print(json.dumps({"ok": False, "found": False, "error": stage, "ocr": result,
+                      "open_incident": incident, "revisit": None}, ensure_ascii=False))
+    _incident_hint(incident)
     return 3
 
 
@@ -1325,6 +1575,7 @@ def _look_locked(a, cancel_check, saved_paths, snapshot=None):
     if combined_cancel is None:
         _ball("橙")          # 脉冲：让用户知道我正在操作（看门狗 120s 自动回蓝）
     st = load_state()
+    previous_consumed_at = (st.get("last_shot") or {}).get("consumed_at", 0)
     # 2026-10-01（App 批次一）：亮屏状态优先用 **App 快照里的 interactive** —— 省掉一次 dumpsys power 往返；
     # 只有走 screencap 回退（obs is None）时才去问 dumpsys。
     if obs is not None and "interactive" in obs:
@@ -1395,6 +1646,21 @@ def _look_locked(a, cancel_check, saved_paths, snapshot=None):
     # A new observation is not permission to repeat an exhausted action.
     if combined_cancel is not None and combined_cancel.read_now(pulse=True):
         return _cancelled_look(cancel_check)
+    revisit = None
+    try:
+        internal = getattr(a, "_batch_internal", False)
+        dhash, history, revisit = _prepare_look_hash(st, path, shot_black, display_id,
+                                                    previous_consumed_at, internal=internal)
+        st["last_shot"]["shot_dhash"] = dhash
+        if not internal:
+            st.pop("look_history", None)
+            if history is not None:
+                st["look_history"] = history
+    except Exception:
+        st["last_shot"].pop("shot_dhash", None)
+        st.pop("look_history", None)
+        revisit = None
+        print("revisit 未计算：状态不可用", file=sys.stderr)
     save_state(st)
     w, h = _screen_size_on(display_id)
     if display_id and (w, h) != (int((obs or {}).get("w") or 0), int((obs or {}).get("h") or 0)):
@@ -1413,8 +1679,12 @@ def _look_locked(a, cancel_check, saved_paths, snapshot=None):
                        "found" if matches else "not_found"),
             "source": "tree" if tree_matches else "pixels" if ocr_result["status"] in ("ok", "empty") else "none",
             "candidates": matches if known else []}}
+    incident = _current_incident(st)
+    _save_target_index(path, (obs.get("nodes") or []) if obs else getattr(nodes, "index_nodes", nodes))
     print(json.dumps({
         **target_result,
+        "open_incident": incident,
+        "revisit": revisit,
         "shot_id": sid, "screenshot": path, "activity": fg,
         "display_id": display_id,
         "display_size": (f"{w}x{h}" if display_id else "main"),
@@ -1457,6 +1727,8 @@ def _look_locked(a, cancel_check, saved_paths, snapshot=None):
     # ⚠️ 以下提示一律走 stderr：stdout 只留那一个 JSON 对象，机器消费方才能直接 json.load。
     #    （复测者实测：原来严格 json.load(stdout) 会报 Extra data: line 21）
     sys.stdout.flush()
+    _incident_hint(incident)
+    _revisit_hint(revisit)
     if zone_coverage == "none":
         print("", file=sys.stderr)
         print("⛔ G2 危险区检查本次**空转**：控件树读到 0 个节点"
@@ -1685,6 +1957,169 @@ def _r3_verify(cred_img, display_id, pt, fresh_img=None, foreground_out=None):
     ok = diff <= R3_MAX_DIFF
     return {"ok": ok, "diff": round(diff, 2),
             "why": "" if ok else "diff=%.1f>%.1f" % (diff, R3_MAX_DIFF)}
+
+
+R3_CATEGORIES = frozenset({"target_shifted", "target_occupied", "target_disappeared", "unclassified"})
+R3_MATCH_THRESHOLD = 0.7  # Size + point containment alone (0.6) is not identity evidence.
+R3_INDEX_MAX_BYTES = 1024 * 1024
+
+
+def _target_node(node):
+    if not isinstance(node, dict) or node.get("visibleToUser") is False:
+        return None
+    rect = node.get("rect")
+    if not isinstance(rect, (list, tuple)) or len(rect) != 4 or any(type(v) is not int for v in rect):
+        return None
+    if rect[2] <= rect[0] or rect[3] <= rect[1]:
+        return None
+    result = {"rect": list(rect), "cls": node.get("cls") or ""}
+    if "viewId" in node or "resource-id" in node:
+        result["resource-id"] = node.get("viewId") or node.get("resource-id") or ""
+    if type(node.get("clickable")) is bool:
+        result["clickable"] = node["clickable"]
+    for key in ("text", "desc"):
+        text = node.get(key)
+        if isinstance(text, str) and text.strip():
+            result[key + "_sha256"] = hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:16]
+    return result
+
+
+def _save_target_index(path, nodes):
+    pending = None
+    fd = None
+    try:
+        index = [item for node in nodes if (item := _target_node(node)) is not None]
+        payload = json.dumps(index, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        if len(payload) > R3_INDEX_MAX_BYTES:
+            raise ValueError("index too large")
+        dest = path + ".nodes.json"
+        temp = dest + ".tmp-" + os.urandom(8).hex()
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        pending = temp
+        stream = os.fdopen(fd, "wb")
+        fd = None
+        with stream:
+            stream.write(payload)
+        os.replace(temp, dest)
+        pending = None
+    except Exception:
+        print("目标索引未保存：下次 R3 拒绝可能无法分类", file=sys.stderr)
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if pending is not None:
+            try:
+                os.unlink(pending)
+            except OSError:
+                pass
+
+
+def _read_target_index(path):
+    fd = os.open(path + ".nodes.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > R3_INDEX_MAX_BYTES:
+            raise ValueError("invalid index file")
+        stream = os.fdopen(fd, "rb")
+        fd = None
+        with stream:
+            payload = stream.read(R3_INDEX_MAX_BYTES + 1)
+        if len(payload) > R3_INDEX_MAX_BYTES:
+            raise ValueError("index grew beyond limit")
+        nodes = json.loads(payload)
+        if not isinstance(nodes, list):
+            raise ValueError("invalid index shape")
+        return nodes
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _r3_contains(rect, pt):
+    return rect[0] <= pt[0] < rect[2] and rect[1] <= pt[1] < rect[3]
+
+
+def _r3_area(node):
+    r = node["rect"]
+    return (r[2] - r[0]) * (r[3] - r[1])
+
+
+def _r3_related(nodes, left, right):
+    """Sparse preorder depths can exclude ancestry; absent depths cannot."""
+    lo, hi = sorted((left, right))
+    depths = [n.get("depth") if isinstance(n, dict) else None for n in nodes[lo:hi + 1]]
+    if any(type(d) is not int or d < 0 for d in depths):
+        return None
+    return all(d > depths[0] for d in depths[1:])
+
+
+def _r3_classify(cred_img, display_id, pt, last=None):
+    """Diagnostic only. Never return an actionable replacement coordinate."""
+    unknown = ("unclassified", {}, "")
+    try:
+        old_nodes = _read_target_index(cred_img)
+        containing = [n for n in old_nodes if _target_node(n) and _r3_contains(n["rect"], pt)]
+        if not containing:
+            return unknown
+        old = min(containing, key=lambda n: (_r3_area(n), not n.get("clickable", False)))
+        if not any(old.get(key) for key in ("resource-id", "text_sha256", "desc_sha256")):
+            return unknown
+        # One second for App polling, two seconds for the entire transport subprocess.
+        fresh = observe(with_image=False, display_id=display_id, timeout=1.0, transport_timeout=2.0)
+        if (not fresh or fresh.get("err") or not isinstance(fresh.get("nodes"), list)
+                or int(fresh.get("displayId", 0)) != display_id
+                or fresh.get("coverage") == "none" or fresh.get("displayCoverage") == "none"
+                or fresh.get("treeHash") == "0000000000000000"):
+            return unknown
+        last = last or {}
+        old_pkg = (last.get("fg") or "").split("/")[0]
+        if (not old_pkg or (fresh.get("fg") or "").split("/")[0] != old_pkg
+                or type(last.get("window_id")) is not int or last["window_id"] < 0
+                or fresh.get("windowId") != last["window_id"]
+                or fresh.get("black") is True or fresh.get("interactive") is False):
+            return unknown
+        nodes = fresh["nodes"]
+        indexed = [(i, node) for i, raw in enumerate(nodes) if (node := _target_node(raw)) is not None]
+        if not indexed:
+            return unknown
+        def score(node):
+            a, b = old["rect"], node["rect"]
+            return (0.5 * bool(old.get("resource-id") and old["resource-id"] == node.get("resource-id"))
+                    + 0.4 * any(old.get(key) and old[key] == node.get(key)
+                                for key in ("text_sha256", "desc_sha256"))
+                    + 0.3 * ((a[2] - a[0], a[3] - a[1]) == (b[2] - b[0], b[3] - b[1]))
+                    + 0.3 * _r3_contains(b, pt))
+        ranked = sorted(((score(n), i, n) for i, n in indexed), key=lambda row: row[0], reverse=True)
+        if ranked[0][0] < R3_MATCH_THRESHOLD:
+            if any(old.get(key) and old[key] == n.get(key) for _, n in indexed
+                   for key in ("resource-id", "text_sha256", "desc_sha256")):
+                return unknown
+            return "target_disappeared", {}, ""
+        if len(ranked) > 1 and math.isclose(ranked[0][0], ranked[1][0]):
+            return unknown
+        _, match_i, match = ranked[0]
+        r = match["rect"]
+        if not _r3_contains(r, pt):
+            center = [(r[0] + r[2]) // 2, (r[1] + r[3]) // 2]
+            old_r = old["rect"]
+            distance = math.hypot((r[0] + r[2] - old_r[0] - old_r[2]) / 2,
+                                  (r[1] + r[3] - old_r[1] - old_r[3]) / 2)
+            return "target_shifted", {"center": center, "displacement_px": round(distance, 2)}, ""
+        at_point = [(i, n) for i, n in indexed if _r3_contains(n["rect"], pt)]
+        top_i, top = min(at_point, key=lambda row: (_r3_area(row[1]), -row[0]))
+        if (top_i != match_i and _r3_related(nodes, top_i, match_i) is False
+                and not any(top.get(k) and top.get(k) == match.get(k)
+                            for k in ("resource-id", "text_sha256", "desc_sha256"))):
+            evidence = {"cls": top["cls"], "resource-id": top.get("resource-id", ""), "rect": top["rect"]}
+            # Text stays transient and stderr-only, never in audit or incident.
+            text = " ".join((nodes[top_i].get("text") or "").split())[:20]
+            return "target_occupied", evidence, text
+        return unknown
+    except Exception:
+        return unknown
 
 
 def _long_press_ms(a):
@@ -1939,6 +2374,7 @@ def do_action(a, kind, points):
                    "r3_anchor": _GATE_EVIDENCE.get("r3_anchor"),
                    "goal_verified": False, "retryable": False}
             audit(rec)
+            _record_incident({**rec, "reason_code": "OP_FAILED"})
             print(json.dumps(rec, ensure_ascii=False))
             return 3
     if getattr(a, "_batch_locked", False):
@@ -1947,8 +2383,8 @@ def do_action(a, kind, points):
         return run()
 
 
-def _refuse_action(a, kind, points, last, reason, reason_code=None):
-    print(f"✗ 闸门拒绝：{reason}", file=sys.stderr)
+def _refuse_action(a, kind, points, last, reason, reason_code=None, *, stderr_detail=""):
+    print(f"✗ 闸门拒绝：{reason}{stderr_detail}", file=sys.stderr)
     rec = {"kind": kind, "points": points, "expect": getattr(a, "expect", None),
            "shot": getattr(a, "shot", None), "allowed": False, "reason": reason,
            "shot_before": "", "dispatch_status": "not_submitted",
@@ -1963,7 +2399,10 @@ def _refuse_action(a, kind, points, last, reason, reason_code=None):
            "approval_verified": False, "goal_verified": False}
     if reason_code is not None:
         rec["reason_code"] = reason_code
+    if _GATE_EVIDENCE.get("r3_category") in R3_CATEGORIES:
+        rec.update({key: _GATE_EVIDENCE[key] for key in ("r3_category", "r3_evidence")})
     audit(rec)
+    _record_incident(rec, getattr(a, "display", 0))
     return 2
 
 
@@ -2085,6 +2524,7 @@ def _do_action_locked(a, kind, points):
                "why": getattr(a, "why", None),
                "dispatch_status": "not_submitted", "shot_before": ""}
         audit(rec)
+        _record_incident(rec)
         print("✗ 闸门拒绝：%s" % _reason, file=sys.stderr)
         if _tag == "vd_required":
             print("   本次未下发任何动作。", file=sys.stderr)
@@ -2145,9 +2585,23 @@ def _do_action_locked(a, kind, points):
         if not r3.get("ok"):
             if r3.get("write_failed"):
                 return _observation_failure("capture_failed", {"status": "error", "rows": []})
+            detail, stderr_detail = "页面在看完之后变了", ""
+            # _r3_verify already rejected; the rounded diff can equal the threshold.
+            if isinstance(r3.get("diff"), (int, float)):
+                category, evidence, text = _r3_classify(cred_img, display_id, points[0], last=last)
+                _GATE_EVIDENCE.update(r3_category=category, r3_evidence=evidence)
+                if category == "target_shifted":
+                    detail = "目标已移到 (%s, %s) 附近" % tuple(evidence["center"])
+                else:
+                    detail = {"target_occupied": "目标被另一个元素挡住",
+                              "target_disappeared": "目标已不在页面上",
+                              "unclassified": "无法确认目标去向"}[category]
+                if text:
+                    stderr_detail = " 遮挡元素文字：" + text
             return _refuse_action(a, kind, points, last,
-                                  "派发前目标所在行与观测时不一致（%s）：页面在看完之后变了，动作未下发；"
-                                  "请重新 look 并分析，不得自动重试。" % (r3.get("why") or "?"))
+                                  "派发前目标所在行与观测时不一致（%s）：%s，动作未下发；"
+                                  "请重新 look 并分析，不得自动重试。" % (r3.get("why") or "?", detail),
+                                  stderr_detail=stderr_detail)
     fg_before = (foreground(display_id, dump=before_foreground["dump"])
                  if "dump" in before_foreground else _foreground_on(display_id))
     # Evidence preparation can outlive the gate check. Reject a change already
@@ -2381,6 +2835,11 @@ def _do_action_locked(a, kind, points):
                               "ui_reacted": ui_reacted, "outcome": "command_completed"})
     save_state(st)
 
+    if ui_reacted:
+        _clear_incident()
+    else:
+        _record_incident({**rec, "reason_code": "OP_FAILED"})
+
     _out = {k: rec[k] for k in
             ("kind", "points", "expect", "display_id", "vd_sid", "gesture_channel",
              "act_before", "act_after",
@@ -2568,8 +3027,10 @@ def cmd_tap(a):
             print("✗ 节点解析失败：%s" % r.get("why"), file=sys.stderr)
             for c in r.get("candidates", []):
                 print("   候选：%s" % json.dumps(c, ensure_ascii=False), file=sys.stderr)
-            audit({"kind": "tap", "handle": node, "allowed": False,
-                   "reason": r.get("why"), "resolved_by": r.get("by")})
+            rec = {"kind": "tap", "handle": node, "allowed": False,
+                   "reason": r.get("why"), "resolved_by": r.get("by")}
+            audit(rec)
+            _record_incident(rec, getattr(a, "display", 0), locked=getattr(a, "_batch_locked", False))
             return 2
         a.resolved_by = r.get("by")
         a.node_handle = node
@@ -2591,8 +3052,10 @@ def cmd_long_press(a):
         r = resolve_handle(node)
         if not r.get("ok"):
             print("✗ 节点解析失败：%s" % r.get("why"), file=sys.stderr)
-            audit({"kind": "long_press", "handle": node, "allowed": False,
-                   "reason": r.get("why"), "resolved_by": r.get("by")})
+            rec = {"kind": "long_press", "handle": node, "allowed": False,
+                   "reason": r.get("why"), "resolved_by": r.get("by")}
+            audit(rec)
+            _record_incident(rec, getattr(a, "display", 0), locked=getattr(a, "_batch_locked", False))
             return 2
         a.resolved_by = r.get("by")
         print("→ 句柄解析 [%s] → (%d,%d)" % (r.get("by"), r["x"], r["y"]), file=sys.stderr)
@@ -2609,8 +3072,10 @@ def cmd_drag(a):
         r = resolve_handle(node)
         if not r.get("ok"):
             print("✗ 节点解析失败：%s" % r.get("why"), file=sys.stderr)
-            audit({"kind": "drag", "handle": node, "allowed": False,
-                   "reason": r.get("why"), "resolved_by": r.get("by")})
+            rec = {"kind": "drag", "handle": node, "allowed": False,
+                   "reason": r.get("why"), "resolved_by": r.get("by")}
+            audit(rec)
+            _record_incident(rec, getattr(a, "display", 0), locked=getattr(a, "_batch_locked", False))
             return 2
         a.resolved_by = r.get("by")
         print("→ 句柄解析 [%s] → (%d,%d)" % (r.get("by"), r["x"], r["y"]), file=sys.stderr)
@@ -2760,7 +3225,8 @@ def _batch_validate(raw, display_id):
     return steps, None
 
 
-def _batch_output(batch_id, size, results, stopped_at=None, code=None, protect=None):
+def _batch_output(batch_id, size, results, stopped_at=None, code=None, protect=None,
+                  *, display_id=0, locked=False):
     if code is not None:
         stop = {"kind": "batch_stop", "batch_id": batch_id, "batch_size": size,
                 "reason_code": code, "allowed": False, "goal_verified": False}
@@ -2770,6 +3236,7 @@ def _batch_output(batch_id, size, results, stopped_at=None, code=None, protect=N
             audit(stop)
         except OSError:
             pass
+        _record_incident(stop, display_id, locked=locked)
     if protect is not None:
         _prune_after_look(protect)
     print(json.dumps({"ok": code is None, "batch_id": batch_id, "batch_size": size,
@@ -2788,25 +3255,28 @@ def cmd_batch(a):
         code = ("BATCH_CANCELLED" if isinstance(exc, KeyboardInterrupt) else
                 "G5_AUDIT_FAILED" if isinstance(exc, OSError) else "OP_FAILED")
         return _batch_output(batch_id, progress["size"], progress["results"],
-                             progress["index"], code, progress["protect"])
+                             progress["index"], code, progress["protect"], display_id=a.display)
 
 
 def _batch_run(a, batch_id, progress):
     if cfg_get("batch.enabled") is not True:
         print("批量动作未开启，请由 owner 开启。", file=sys.stderr)
-        return _batch_output(batch_id, 0, [], 0, "BATCH_DISABLED")
+        return _batch_output(batch_id, 0, [], 0, "BATCH_DISABLED", display_id=a.display)
     steps, error = _batch_validate(a.steps, a.display)
     if error:
         print("批量预检未通过：只支持最多 6 步带 expect 的 tap。", file=sys.stderr)
-        return _batch_output(batch_id, len(steps) if steps else 0, [], 0, error)
+        return _batch_output(batch_id, len(steps) if steps else 0, [], 0, error, display_id=a.display)
 
     global _BATCH_CONTEXT, _BATCH_RECORDS
     results, size = [], len(steps)
     progress.update(size=size, results=results)
+    def output(*args):
+        return _batch_output(*args, display_id=a.display, locked=True)
+
     with lock():
         initial = load_state().get("last_shot") or {}
         if initial.get("id") != a.shot:
-            return _batch_output(batch_id, size, results, 0, "G1_MISMATCH")
+            return output(batch_id, size, results, 0, "G1_MISMATCH")
         cancel_check = _ocr_cancel_check()
         anchor_fg = initial.get("fg")
         anchor_window_id = initial.get("window_id")
@@ -2817,13 +3287,13 @@ def _batch_run(a, batch_id, progress):
         for index, step in enumerate(steps, 1):
             progress["index"] = index
             if cancel_check():
-                return _batch_output(batch_id, size, results, index, "BATCH_CANCELLED", progress["protect"])
+                return output(batch_id, size, results, index, "BATCH_CANCELLED", progress["protect"])
             if index > 1:
                 if not anchor_fg or not _fg_same(_foreground_on(a.display), anchor_fg):
-                    return _batch_output(batch_id, size, results, index, "G1_FOREGROUND", progress["protect"])
+                    return output(batch_id, size, results, index, "G1_FOREGROUND", progress["protect"])
                 saved_paths = []
                 look_args = argparse.Namespace(display=a.display, note="", ocr=False,
-                                               target=None, force_look=True)
+                                               target=None, force_look=True, _batch_internal=True)
                 try:
                     with contextlib.redirect_stdout(io.StringIO()):
                         look_rc = _look_locked(look_args, cancel_check, saved_paths)
@@ -2832,18 +3302,18 @@ def _batch_run(a, batch_id, progress):
                         protect = {anchor_path, saved_paths[-1]}
                         progress["protect"] = protect
                 if cancel_check():
-                    return _batch_output(batch_id, size, results, index, "BATCH_CANCELLED", progress["protect"])
+                    return output(batch_id, size, results, index, "BATCH_CANCELLED", progress["protect"])
                 if look_rc != 0:
-                    return _batch_output(batch_id, size, results, index, "G1_OTHER", progress["protect"])
+                    return output(batch_id, size, results, index, "G1_OTHER", progress["protect"])
                 fresh = load_state().get("last_shot") or {}
                 if not anchor_fg or not _fg_same(fresh.get("fg"), anchor_fg):
-                    return _batch_output(batch_id, size, results, index, "G1_FOREGROUND", protect)
+                    return output(batch_id, size, results, index, "G1_FOREGROUND", protect)
                 fresh_window_id = fresh.get("window_id")
                 if (type(anchor_window_id) is not int or anchor_window_id < 0 or
                         type(fresh_window_id) is not int or fresh_window_id < 0 or
                         fresh_window_id != anchor_window_id or
                         any(d not in anchor_dialogs for d in (fresh.get("dialogs") or []))):
-                    return _batch_output(batch_id, size, results, index, "BATCH_WINDOW_CHANGED", protect)
+                    return output(batch_id, size, results, index, "BATCH_WINDOW_CHANGED", protect)
                 shot = fresh.get("id")
 
             action = argparse.Namespace(shot=shot, display=a.display, fast=False,
@@ -2860,12 +3330,14 @@ def _batch_run(a, batch_id, progress):
                 with contextlib.redirect_stdout(io.StringIO()):
                     rc = cmd_tap(action)
                 if not _BATCH_RECORDS:
-                    audit({"kind": "tap", "allowed": False, "points": [],
+                    rec = {"kind": "tap", "allowed": False, "points": [],
                            "reason": "批量步骤参数无效", "reason_code": "BATCH_STEP_INVALID",
-                           "dispatch_status": "not_submitted", "goal_verified": False})
+                           "dispatch_status": "not_submitted", "goal_verified": False}
+                    audit(rec)
+                    _record_incident(rec, a.display)
                 record = _BATCH_RECORDS[-1]
             except Exception as exc:
-                return _batch_output(batch_id, size, results, index,
+                return output(batch_id, size, results, index,
                                      "G5_AUDIT_FAILED" if isinstance(exc, OSError) else "OP_FAILED", protect)
             finally:
                 _BATCH_CONTEXT = None
@@ -2878,12 +3350,12 @@ def _batch_run(a, batch_id, progress):
                       "r3_anchor": record.get("r3_anchor")}
             results.append(result)
             if rc != 0:
-                return _batch_output(batch_id, size, results, index,
+                return output(batch_id, size, results, index,
                                      record.get("reason_code") or "OP_FAILED", protect)
             if record.get("ui_reacted") is not True:
-                return _batch_output(batch_id, size, results, index, "BATCH_NO_REACTION", protect)
+                return output(batch_id, size, results, index, "BATCH_NO_REACTION", protect)
             if not anchor_fg or not _fg_same(record.get("act_after"), anchor_fg):
-                return _batch_output(batch_id, size, results, index, "G1_FOREGROUND", protect)
+                return output(batch_id, size, results, index, "G1_FOREGROUND", protect)
     return _batch_output(batch_id, size, results, protect=protect)
 
 
@@ -3028,6 +3500,8 @@ def cmd_open(a):
         except Exception:
             rc = 3
             record.update(ok=False, status="unknown", reason="audit_failed", launch_verified=False)
+        if status == "refused":
+            _record_incident(record)
         print(json.dumps(record, ensure_ascii=False))
         return rc
 

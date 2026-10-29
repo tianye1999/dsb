@@ -72,6 +72,62 @@ class ShotRetentionTests(unittest.TestCase):
         self.assertFalse(second.exists())
         self.assertFalse(first.exists())
 
+    def test_target_indexes_share_retention_and_image_protection(self):
+        old = [self.file("shot-1.jpg"), self.file("shot-1.jpg.nodes.json")]
+        protected = [self.file("shot-2.png"), self.file("shot-2.png.nodes.json")]
+        orphan = self.file("shot-3.jpeg.nodes.json")
+        other = self.file("unrelated.nodes.json")
+        dry = self.prune(dry_run=True, protect=[protected[0]])
+        self.assertEqual(dry["deleted"], 3)
+        self.assertTrue(all(p.exists() for p in old + protected + [orphan, other]))
+        result = self.prune(protect=[protected[0]])
+        self.assertEqual(result["deleted"], 3)
+        self.assertTrue(all(not p.exists() for p in old + [orphan]))
+        self.assertTrue(all(p.exists() for p in protected + [other]))
+
+    def test_young_index_deleted_with_image_without_using_file_budget(self):
+        image = self.file("shot-1.jpg")
+        index = self.file("shot-1.jpg.nodes.json", age_days=0)
+        result = self.prune(max_files=1)
+        self.assertEqual(result["deleted"], 2)
+        self.assertFalse(image.exists())
+        self.assertFalse(index.exists())
+
+    def test_orphan_indexes_do_not_consume_screenshot_budget(self):
+        orphan = self.file("shot-1.jpg.nodes.json")
+        image = self.file("shot-2.jpg")
+        result = self.prune(max_files=1)
+        self.assertEqual(result["deleted"], 2)
+        self.assertFalse(orphan.exists())
+        self.assertFalse(image.exists())
+
+    def test_usage_excludes_indexes_from_count_bytes_age_and_budget(self):
+        for i in range(10):
+            self.file(f"shot-{i}.jpg.nodes.json", age_days=20)
+        self.file("shot-1.jpg", age_days=1)
+        usage = retention.directory_usage(self.root, now=self.now, max_entries=1)
+        self.assertEqual((usage["files"], usage["bytes"], usage["oldest_days"], usage["scanned"]), (1, 5, 1, 1))
+        self.assertFalse(usage["truncated"])
+        output = io.StringIO()
+        with patch.object(st, "SHOTS", str(self.root)), \
+                patch.object(st, "transport_check", return_value=("fail", "offline")), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(st.cmd_doctor(types.SimpleNamespace()), 2)
+        self.assertIn("1 文件", output.getvalue())
+
+    def test_sidecar_fifo_and_symlink_not_followed_or_removed(self):
+        self.file("shot-1.jpg")
+        self.file("shot-2.jpg")
+        fifo = self.root / "shot-1.jpg.nodes.json"
+        os.mkfifo(fifo)
+        victim = self.file("unrelated.txt")
+        link = self.root / "shot-2.jpg.nodes.json"
+        link.symlink_to(victim)
+        self.assertEqual(self.prune()["deleted"], 2)
+        self.assertTrue(fifo.is_fifo())
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(victim.read_bytes(), b"12345")
+
     def test_invalid_environment_defaults_to_three_days(self):
         recent = self.file("shot-1.jpg", 2)
         old = self.file("shot-2.jpg", 4)
@@ -262,6 +318,7 @@ class ShotRetentionTests(unittest.TestCase):
 
     def test_manual_command_protects_current_credential(self):
         current = self.file("shot-1.jpg")
+        index = self.file("shot-1.jpg.nodes.json")
         stale = self.file("shot-2.jpg")
         output = io.StringIO()
         with patch.object(st, "SHOTS", str(self.root)), \
@@ -269,6 +326,7 @@ class ShotRetentionTests(unittest.TestCase):
                 patch.object(st, "audit") as audit, contextlib.redirect_stdout(output):
             self.assertEqual(st.cmd_prune_shots(types.SimpleNamespace(days=1, dry_run=False)), 0)
         self.assertTrue(current.exists())
+        self.assertTrue(index.exists())
         self.assertFalse(stale.exists())
         self.assertFalse((self.root / ".retention-stamp").exists())
         self.assertEqual(audit.call_args.args[0]["kind"], "shot_retention")

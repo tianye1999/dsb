@@ -28,6 +28,17 @@ def contents(package):
 
 
 class FeedbackExportTests(unittest.TestCase):
+    def test_shot_dhash_is_silently_dropped_without_changing_export_shape(self):
+        row = {"task_id": TASK, "kind": "tap", "ts": 1.5, "allowed": True}
+        for value in ("0123456789abcdef", None, "private text", {"bad": "private"}):
+            with zipfile.ZipFile(io.BytesIO(build_zip([{**row, "shot_dhash": value}], {}, TASK))) as package:
+                exported = json.loads(package.read("audit.jsonl"))
+                self.assertEqual(exported, redact(row))
+                self.assertNotIn("unknown_fields", exported)
+                self.assertNotIn("shot_dhash", contents(package))
+        self.assertEqual(redact({**row, "shot_dhash": "f" * 16, "unexpected": "secret"}),
+                         redact({**row, "unexpected": "secret"}))
+
     def test_batch_metadata_survives_without_free_text(self):
         batch_id = "b" + "a" * 32
         row = {"task_id": TASK, "kind": "tap", "batch_id": batch_id,
