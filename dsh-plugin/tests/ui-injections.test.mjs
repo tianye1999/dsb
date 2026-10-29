@@ -55,10 +55,35 @@ test('every response collects fresh, stable rows without mutating the disk shell
   assert.equal(createHash('sha256').update(read('pristine-0.2.1-rc.2.html')).digest('hex'), before);
 });
 
+function originalMarkup(html) {
+  const parts = [];
+  let start = 0;
+  // Extract untouched spans from the fixture, without reinterpreting joined text as HTML.
+  for (const match of html.matchAll(/<(style|script) id="[^"]+">[\s\S]*?<\/\1\b[^>]*>|<!--[\s\S]*?--!?>/gi)) {
+    parts.push(html.slice(start, match.index));
+    start = match.index + match[0].length;
+  }
+  parts.push(html.slice(start));
+  return parts.join('').replace(/>\s+</g, '><').trim();
+}
+
+test('original markup extraction handles mixed-case tags and permissive end tags', () => {
+  for (const end of ['>', ' >', '\t\n bar>', ' foo="bar">']) {
+    assert.equal(originalMarkup(`<main>before</main><ScRiPt id="patch">code</sCrIpT${end}<footer>after</footer>`),
+      '<main>before</main><footer>after</footer>');
+  }
+});
+
+test('original markup extraction preserves every span outside injected blocks and comments', () => {
+  const shell = '<head><title>Original</title><script src="app.js"></script></head><body>text<div id="root"></div></body>';
+  assert.equal(originalMarkup(shell), shell);
+  assert.equal(originalMarkup('before<!-- note --!>after'), 'beforeafter');
+  assert.equal(originalMarkup('<!<script id="patch">code</script>--original-->'), '<!--original-->');
+  assert.equal(originalMarkup('<scr<script id="patch">code</script>ipt>original</script>'), '<script>original</script>');
+});
+
 test('legacy chain made no original-markup changes requiring tapIndex', () => {
-  const normalize = html => html.replace(/<(style|script) id="([^"]+)">[\s\S]*?<\/\1>/g, '')
-    .replace(/<!--[\s\S]*?-->/g, '').replace(/>\s+</g, '><').trim();
-  assert.equal(normalize(legacy), normalize(pristine));
+  assert.equal(originalMarkup(legacy), originalMarkup(pristine));
 });
 
 test('narrow-screen effort label, rail layers and original privacy script remain intact', () => {

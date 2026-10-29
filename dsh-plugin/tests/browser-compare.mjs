@@ -118,7 +118,7 @@ try {
             const deferred = scans === before && frames.length === 1 && !options.characterData;
             frames.shift()();
             return deferred && scans > before && frames.length === 0;
-          }, indexRows().find(row => row.html.includes('function openFeedback')).html.match(/<script[^>]*>([\s\S]*?)<\/script>/)[1]);
+          }, indexRows().find(row => row.html.includes('function openFeedback')).html.match(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/i)[1]);
           assert.equal(observer, true);
           await sidebar('full');
           await page.getByRole('button', {name: '账号菜单', exact: true}).click();

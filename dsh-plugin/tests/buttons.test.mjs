@@ -20,7 +20,7 @@ function fixture() {
     MutationObserver:class{observe(){}},setInterval(fn,ms){intervals.set(ms,fn);},
     setTimeout(fn,ms){timers.push({fn,ms});}};
   for(const id of ['dsh-tobottom-keep-script','dsh-composer-autohide']){
-    const source=indexRows().find(r=>r.html.includes(`id="${id}"`)).html.match(/<script[^>]*>([\s\S]*?)<\/script>/)[1];
+    const source=indexRows().find(r=>r.html.includes(`id="${id}"`)).html.match(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/i)[1];
     vm.runInNewContext(source,context);
   }
   return {nodes,scroll,svg,intervals,events,get mode(){return mode;},

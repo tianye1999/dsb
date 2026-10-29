@@ -6,7 +6,7 @@ import {spawnSync} from 'node:child_process';
 import {indexRows} from './dsb-ui/index.js';
 
 const privacyScript = () => indexRows().find(row => row.html.includes('function openFeedback'))
-  .html.match(/<script[^>]*>([\s\S]*?)<\/script>/)[1];
+  .html.match(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/i)[1];
 
 test('brand uses declared DSH slots and the App illustration, not official artwork', async () => {
   const built = spawnSync(process.execPath, [new URL('./build.mjs', import.meta.url).pathname, '--check']);
