@@ -152,7 +152,7 @@ def foreground(display_id=0, dump=None):
     return ""
 
 
-def adb_batch(cmds, t=20):
+def adb_batch(cmds, t=20, run=None):
     """一次 adb shell 跑多条只读查询，逐条取输出、逐条校验退出码（2026-10-21 提速，省往返不省证据）。
 
     cmds: [(名字, shell 命令[, 允许的退出码元组])]，默认只允许 0。返回 {名字: 输出}。
@@ -161,10 +161,11 @@ def adb_batch(cmds, t=20):
     分隔行带随机 nonce、必须独占一行且按序各出现一次，防命令输出里碰巧含分隔串。
     任何一条退出码不在允许范围 / 分隔行缺失错乱 → VDError（调用方 fail closed）。
     """
-    nonce = os.urandom(6).hex()
+    nonce = str(int.from_bytes(os.urandom(6), "big"))
     script = "; ".join("%s; r=$?; echo; echo __DSB_%s_%d__ $r" % (c[1], nonce, i)
                        for i, c in enumerate(cmds))
-    out = adb("shell", script, t=t)
+    out = (run("shell", ORANGE_SH + script, t=t, checked=True) if run is not None
+           else adb("shell", script, t=t))
     marks = list(re.finditer(r"^__DSB_%s_(\d+)__ (\d+)\r?$" % nonce, out, re.M))
     if [int(m.group(1)) for m in marks] != list(range(len(cmds))):
         raise VDError("adb_batch_frame_broken:%d/%d" % (len(marks), len(cmds)))
@@ -551,7 +552,22 @@ VD_ON_BEHALF_PKGS = {
 }
 
 
-def verify(sid=None):
+def verification_queries(s, integer_literals=False):
+    package = str(s.get("package") or "-")
+    pid_query = "pidof %s" % shlex.quote(package)
+    if integer_literals:
+        # Only byte integers enter the combined shell, never package text as code.
+        byte_args = " ".join(str(b) for b in package.encode("utf-8"))
+        pid_query = ("p=$(printf '%b_' \"$(printf '\\\\0%03o' " + byte_args + ")\"); "
+                     'pidof "${p%_}"')
+    return [("displays", "cmd display get-displays -i"),
+            ("display", "dumpsys display 2>&1"),
+            ("overlay", "settings get global %s" % OVERLAY_KEY),
+            ("activities", "dumpsys activity activities 2>&1"),
+            ("pidof", pid_query, (0, 1))]
+
+
+def verify(sid=None, snapshot=None):
     s = load_session()
     if not s:
         return {"ok": False, "reason": "no_session"}
@@ -566,7 +582,7 @@ def verify(sid=None):
     # 现在 5 条查询一次 adb_batch（逐条校验退出码），scrcpy 存活（ssh kill -0）与之并行。
     scrcpy_alive = None if s.get("overlayValue") else _in_background(_termux_alive, s.get("scrcpyPid"))
     try:
-        return _verify_device(s, now, scrcpy_alive)
+        return _verify_device(s, now, scrcpy_alive, snapshot)
     finally:
         if scrcpy_alive:
             scrcpy_alive()      # 提前返回也等探活结束（其 subprocess 自带 15s 超时），不留孤儿 ssh
@@ -576,14 +592,15 @@ def verify(sid=None):
 DUMPSYS_FAILURE_RE = re.compile(r"DUMP TIMEOUT|Error dumping service")
 
 
-def _verify_device(s, now, scrcpy_alive):
+def _verify_device(s, now, scrcpy_alive, snapshot=None):
     did = int(s.get("displayId", -1))
     try:
-        q = adb_batch([("displays", "cmd display get-displays -i"),
-                       ("display", "dumpsys display 2>&1"),
-                       ("overlay", "settings get global %s" % OVERLAY_KEY),
-                       ("activities", "dumpsys activity activities 2>&1"),
-                       ("pidof", "pidof %s" % shlex.quote(str(s.get("package") or "-")), (0, 1))])
+        if snapshot is not None and snapshot[0] == s:
+            q = snapshot[1]
+            if isinstance(q, VDError):
+                raise q
+        else:
+            q = adb_batch(verification_queries(s))
     except VDError as e:
         return {"ok": False, "reason": str(e), "session": s}
     for name in ("display", "activities"):
