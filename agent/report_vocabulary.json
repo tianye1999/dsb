@@ -5,8 +5,10 @@
     "G1_FOREGROUND", "G1_OTHER", "G2_DANGER_ZONE", "G2B_KEY", "G2B_ACK",
     "G2B_OCR_UNAVAILABLE", "G2B_OCR_DANGER", "G2B_OCR_BAND", "G2B_VISION_RISK",
     "G2B_VISION_UNAVAILABLE", "G3_EDGE", "G3_BOUNDS", "G4_BUDGET", "G4_CONFIG",
-    "R3_CHANGED", "R3_OTHER", "VD_REQUIRED", "VD_POLICY", "OTHER_REFUSAL"
+    "R3_CHANGED", "R3_OTHER", "VD_REQUIRED", "VD_POLICY", "OTHER_REFUSAL",
+    "BATCH_DISABLED", "BATCH_LIMIT", "BATCH_UNSUPPORTED", "BATCH_STEP_INVALID"
   ],
+  "batch_stop_reason_codes": ["BATCH_NO_REACTION", "BATCH_CANCELLED", "BATCH_WINDOW_CHANGED"],
   "read_ops": ["look", "wait.app", "wait.stable", "wait.text", "wait.text.ocr"],
   "actions": {
     "tap": "点击", "swipe": "滑动", "key": "按键", "scroll": "滚动",
@@ -61,6 +63,13 @@
     "HANDOFF": "任务停在需要人工接管的地方。",
     "OTHER_REFUSAL": "安全检查未通过，动作没有下发。",
     "OP_APP_NOT_FOUND": "没找到这个应用，请确认名称。",
-    "OP_FAILED": "操作未成功，请检查后重试。"
+    "OP_FAILED": "操作未成功，请检查后重试。",
+    "BATCH_DISABLED": "批量动作尚未开启，没有执行任何步骤。",
+    "BATCH_LIMIT": "批量步骤超过上限，没有执行任何步骤。",
+    "BATCH_UNSUPPORTED": "批量含不支持的动作，没有执行任何步骤。",
+    "BATCH_STEP_INVALID": "批量步骤参数无效，动作没有下发。",
+    "BATCH_NO_REACTION": "点按后界面没有确认反应，批量已停止。",
+    "BATCH_CANCELLED": "任务已取消，批量已停止。",
+    "BATCH_WINDOW_CHANGED": "出现新窗口或弹窗，批量已停止。"
   }
 }

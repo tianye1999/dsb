@@ -35,6 +35,8 @@ Screen actions on the normal execution path go through `agent/safe_tap.py`. It i
 - **G5 evidence**: before/after screenshots + audit
 - **R3 pre-dispatch recheck**: just before dispatch, capture a fresh frame and compare the target's row with the credential frame; refuse if it changed
 
+The optional tap-only `batch` command is off by default: each tap passes all the same gates, and from step two onward a new same-display observation is checked with R3 against the frame the brain originally saw before dispatch. A new window or dialog stops the batch. `ui_reacted` is a whole-screen signal: a pixel, tree, or event change can mark it true, and only no change anywhere stops the batch on that basis. It does not prove the intended target reacted; the original-frame R3 check separately guards subsequent target bands. Because the brain has shell access, it can technically change this configuration; the default is not a security isolation boundary.
+
 These checks are not a guarantee that "the whole system fails closed". When enabled, the command-level TypeSafe hook has a fail-open branch when its service is unavailable; see the data flow below. Rules for changing a gate are in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ### 2. Privacy: what leaves the phone and what stays

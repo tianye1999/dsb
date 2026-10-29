@@ -58,7 +58,9 @@ G5. **每次点击自动留证**
 """
 import argparse
 import base64
+import contextlib
 import fcntl
+import io
 import json
 import os
 import re
@@ -189,6 +191,7 @@ def sh(*a, t=90, checked=False):
 # ── 运行时配置（2026-10-01 借鉴 phone-harness config get/set：调参不改代码）──
 CONFIG_FILE = os.path.join(HERE, "safe_tap_config.json")
 CONFIG_DEFAULTS = {
+    "batch.enabled": False,             # 批量动作必须显式开启
     "look.ttl": 90.0,                  # G1 凭据 TTL（秒）
     "action.settle_budget": 2.5,       # 动作后稳定轮询预算（秒）
     "action.settle_budget_fast": 1.2,  # --fast 档预算
@@ -374,8 +377,14 @@ def save_state(s):
                 pass
 
 
+_BATCH_CONTEXT = None
+_BATCH_RECORDS = None
+
+
 def audit(rec):
     rec = dict(rec)
+    if _BATCH_CONTEXT is not None and rec.get("kind") == "tap":
+        rec.update(_BATCH_CONTEXT)
     try:
         enriched = rec.copy()
         if task_context is not None:
@@ -402,6 +411,8 @@ def audit(rec):
             rec["step_no"] = int(_step)
     with open(AUDIT, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    if _BATCH_RECORDS is not None and rec.get("kind") == "tap":
+        _BATCH_RECORDS.append(rec)
 
 
 def lock():
@@ -1001,7 +1012,7 @@ def _look_locked(a, cancel_check, saved_paths):
             return _observation_failure("vd_display_mismatch", {"status": "not_run", "rows": []})
     # 上次动作之后紧接着的 look，必须强制真采 —— 复用帧可能是"动作前"的那一张
     last_action = load_state().get("last_action_ts", 0)
-    force_look = ((time.time() - last_action) < 3.0 or getattr(a, "ocr", False)
+    force_look = (getattr(a, "force_look", False) or (time.time() - last_action) < 3.0 or getattr(a, "ocr", False)
                   or target is not None or display_id != 0)
     obs = observe(with_image=True, force=force_look, display_id=display_id)   # 一次原子观测：截图 + 控件树 同源同刻
     path, src = None, ""
@@ -1124,7 +1135,7 @@ def _look_locked(a, cancel_check, saved_paths):
     prev_win = (st.get("last_shot") or {}).get("window_id", -1)
     cur_win = (obs.get("windowId", -1)) if obs else -1
     window_changed = bool(cur_win != -1 and prev_win not in (-1, None) and cur_win != prev_win)
-    dialogs, interruption_hint = _detect_dialogs(nodes)
+    dialogs, interruption_hint = _detect_dialogs((obs or {}).get("nodes") or nodes)
     st["last_shot"] = {"id": sid, "path": path, "fg": fg,
                        # 2026-10-20 虚拟屏：凭据与显示器/会话/尺寸绑定；check_gate 逐项复核
                        "display_id": display_id,
@@ -1396,7 +1407,7 @@ R3_MAX_DIFF = 6.0     # 48×16 灰度缩略图平均差（0-255）。canary 虚�
                       # 静态两帧 0.0；单个数字变化 2.6–2.9（角标级，放行）；换成另一行 51–58（重排，拒绝）
 
 
-def _r3_verify(cred_img, display_id, pt):
+def _r3_verify(cred_img, display_id, pt, fresh_img=None):
     """派发前复核目标区域（R3）：现拍一帧，与凭据帧比对目标点所在的整行横带。
 
     行重排/内容替换 → 差异大 → 拒绝；拍不到/比不了 → 保守拒绝。只看目标附近一条，
@@ -1408,8 +1419,9 @@ def _r3_verify(cred_img, display_id, pt):
     if not cred_img or not os.path.isfile(cred_img):
         return {"ok": False, "diff": None, "why": "no_credential_image"}
     os.makedirs(SHOTS, exist_ok=True)
-    fresh = grab(os.path.join(SHOTS, "r3-%d.jpg" % int(time.time() * 1000)), force=True,
-                 display_id=display_id)
+    fresh = (fresh_img if fresh_img is not None else
+             grab(os.path.join(SHOTS, "r3-%d.jpg" % int(time.time() * 1000)), force=True,
+                  display_id=display_id))
     if not fresh or not os.path.isfile(fresh):
         return {"ok": False, "diff": None, "why": "capture_failed"}
     try:
@@ -1426,10 +1438,11 @@ def _r3_verify(cred_img, display_id, pt):
     except Exception as e:
         return {"ok": False, "diff": None, "why": "compare_failed:%s" % type(e).__name__}
     finally:
-        try:
-            os.remove(fresh)          # 只留差异值进审计，不多存一张屏
-        except OSError:
-            pass
+        if fresh_img is None:
+            try:
+                os.remove(fresh)          # 只留差异值进审计，不多存一张屏
+            except OSError:
+                pass
     ok = diff <= R3_MAX_DIFF
     return {"ok": ok, "diff": round(diff, 2),
             "why": "" if ok else "diff=%.1f>%.1f" % (diff, R3_MAX_DIFF)}
@@ -1667,7 +1680,7 @@ def check_gate(a, kind, points):
 
 
 def do_action(a, kind, points):
-    with lock():
+    def run():
         try:
             return _do_action_locked(a, kind, points)
         except ActionDispatchError as error:
@@ -1680,15 +1693,20 @@ def do_action(a, kind, points):
                    "ocr_danger": _GATE_EVIDENCE.get("ocr_danger"),
                    "clipboard_cleared": _GATE_EVIDENCE.get("clipboard_cleared"),
                    "r3": _GATE_EVIDENCE.get("r3"),
+                   "r3_anchor": _GATE_EVIDENCE.get("r3_anchor"),
                    "goal_verified": False, "retryable": False}
             audit(rec)
             print(json.dumps(rec, ensure_ascii=False))
             return 3
+    if getattr(a, "_batch_locked", False):
+        return run()
+    with lock():
+        return run()
 
 
-def _refuse_action(a, kind, points, last, reason):
+def _refuse_action(a, kind, points, last, reason, reason_code=None):
     print(f"✗ 闸门拒绝：{reason}", file=sys.stderr)
-    audit({"kind": kind, "points": points, "expect": getattr(a, "expect", None),
+    rec = {"kind": kind, "points": points, "expect": getattr(a, "expect", None),
            "shot": getattr(a, "shot", None), "allowed": False, "reason": reason,
            "shot_before": "", "dispatch_status": "not_submitted",
            "zone_coverage": (last or {}).get("zone_coverage"),
@@ -1697,8 +1715,12 @@ def _refuse_action(a, kind, points, last, reason):
            "vision": (last or {}).get("_vision"),
            "ocr_danger": _GATE_EVIDENCE.get("ocr_danger"),
            "r3": _GATE_EVIDENCE.get("r3"),
+           "r3_anchor": _GATE_EVIDENCE.get("r3_anchor"),
            "ack_no_zones": bool(getattr(a, "ack_no_zones", False)),
-           "approval_verified": False, "goal_verified": False})
+           "approval_verified": False, "goal_verified": False}
+    if reason_code is not None:
+        rec["reason_code"] = reason_code
+    audit(rec)
     return 2
 
 
@@ -1821,6 +1843,14 @@ def _do_action_locked(a, kind, points):
     # 真实事故：飞书发文件时群列表在 look 与 tap 之间重排，两次点错群——G1 只核前台，管不到同页内容变化。
     r3 = None
     if kind in ("tap", "long_press"):
+        anchor = getattr(a, "_batch_anchor", None)
+        if anchor is not None:
+            anchored = _r3_verify(anchor, display_id, points[0], fresh_img=cred_img)
+            _GATE_EVIDENCE["r3_anchor"] = anchored
+            if not anchored.get("ok"):
+                return _refuse_action(a, kind, points, last,
+                                      "派发前目标所在行与观测时不一致（%s）：批量首帧与本步画面不同；"
+                                      "请重新 look 并分析，不得自动重试。" % (anchored.get("why") or "?"))
         r3 = _r3_verify(cred_img, display_id, points[0])
         _GATE_EVIDENCE["r3"] = r3
         if not r3.get("ok"):
@@ -1859,6 +1889,10 @@ def _do_action_locked(a, kind, points):
     for history in ("taps", "keys", "gestures"):
         state[history] = state.get(history, [])[-REPEAT_HISTORY_LIMIT:]
     save_state(state)
+    batch_cancel_check = getattr(a, "_batch_cancel_check", None)
+    if batch_cancel_check is not None and batch_cancel_check():
+        return _refuse_action(a, kind, points, last, "批量任务已取消；动作未下发。",
+                              reason_code="BATCH_CANCELLED")
     gesture_info = {}
     if kind == "type":
         gesture_info = _dispatch_type(display_id, a)
@@ -2001,6 +2035,7 @@ def _do_action_locked(a, kind, points):
            "vision": (last or {}).get("_vision"),
            "ocr_danger": _GATE_EVIDENCE.get("ocr_danger"),
            "r3": r3,
+           "r3_anchor": _GATE_EVIDENCE.get("r3_anchor"),
            "approval_verified": False,
            "ack_no_zones": bool(getattr(a, "ack_no_zones", False)),
            # 2026-10-01：量"坐标点击真实失败率"的数据源
@@ -2378,6 +2413,158 @@ def cmd_type(a):
     if len(text) > TYPE_MAX_CHARS:
         print("✗ 文字超过 %d 字" % TYPE_MAX_CHARS, file=sys.stderr); return 2
     return do_action(a, "type", [279])
+
+
+def _batch_validate(raw, display_id):
+    try:
+        steps = json.loads(raw)
+    except (TypeError, ValueError):
+        return None, "BATCH_STEP_INVALID"
+    if not isinstance(steps, list) or not steps:
+        return None, "BATCH_STEP_INVALID"
+    if len(steps) > 6:
+        return steps, "BATCH_LIMIT"
+    for step in steps:
+        if not isinstance(step, dict) or not isinstance(step.get("kind"), str):
+            return None, "BATCH_STEP_INVALID"
+        kind = step["kind"]
+        if kind != "tap":
+            return None, "BATCH_UNSUPPORTED"
+        if display_id != 0 and "node" in step:
+            return None, "BATCH_UNSUPPORTED"
+        coords = type(step.get("x")) is int and type(step.get("y")) is int
+        node = isinstance(step.get("node"), str) and bool(step["node"])
+        if (set(step) - {"kind", "x", "y", "node", "expect"} or coords == node or
+                not isinstance(step.get("expect"), str) or not step["expect"].strip()):
+            return None, "BATCH_STEP_INVALID"
+    return steps, None
+
+
+def _batch_output(batch_id, size, results, stopped_at=None, code=None, protect=None):
+    if code is not None:
+        stop = {"kind": "batch_stop", "batch_id": batch_id, "batch_size": size,
+                "reason_code": code, "allowed": False, "goal_verified": False}
+        if stopped_at and 1 <= stopped_at <= 6:
+            stop["batch_index"] = stopped_at
+        try:
+            audit(stop)
+        except OSError:
+            pass
+    if protect is not None:
+        _prune_after_look(protect)
+    print(json.dumps({"ok": code is None, "batch_id": batch_id, "batch_size": size,
+                      "steps": results, "stopped_at": stopped_at,
+                      "stop_reason_code": code}, ensure_ascii=False))
+    return 0 if code is None else 2
+
+
+def cmd_batch(a):
+    """Run up to six independently gated taps under one device lock."""
+    batch_id = "b" + os.urandom(16).hex()
+    progress = {"size": 0, "results": [], "index": 0, "protect": None}
+    try:
+        return _batch_run(a, batch_id, progress)
+    except (Exception, KeyboardInterrupt) as exc:
+        code = ("BATCH_CANCELLED" if isinstance(exc, KeyboardInterrupt) else
+                "G5_AUDIT_FAILED" if isinstance(exc, OSError) else "OP_FAILED")
+        return _batch_output(batch_id, progress["size"], progress["results"],
+                             progress["index"], code, progress["protect"])
+
+
+def _batch_run(a, batch_id, progress):
+    if cfg_get("batch.enabled") is not True:
+        print("批量动作未开启，请由 owner 开启。", file=sys.stderr)
+        return _batch_output(batch_id, 0, [], 0, "BATCH_DISABLED")
+    steps, error = _batch_validate(a.steps, a.display)
+    if error:
+        print("批量预检未通过：只支持最多 6 步带 expect 的 tap。", file=sys.stderr)
+        return _batch_output(batch_id, len(steps) if steps else 0, [], 0, error)
+
+    global _BATCH_CONTEXT, _BATCH_RECORDS
+    results, size = [], len(steps)
+    progress.update(size=size, results=results)
+    with lock():
+        initial = load_state().get("last_shot") or {}
+        if initial.get("id") != a.shot:
+            return _batch_output(batch_id, size, results, 0, "G1_MISMATCH")
+        cancel_check = _ocr_cancel_check()
+        anchor_fg = initial.get("fg")
+        anchor_window_id = initial.get("window_id")
+        anchor_path = initial.get("path") or os.path.join(SHOTS, "shot-%s.jpg" % a.shot)
+        anchor_dialogs = initial.get("dialogs") or []
+        protect = {anchor_path}
+        shot = a.shot
+        for index, step in enumerate(steps, 1):
+            progress["index"] = index
+            if cancel_check():
+                return _batch_output(batch_id, size, results, index, "BATCH_CANCELLED", progress["protect"])
+            if index > 1:
+                if not anchor_fg or not _fg_same(_foreground_on(a.display), anchor_fg):
+                    return _batch_output(batch_id, size, results, index, "G1_FOREGROUND", progress["protect"])
+                saved_paths = []
+                look_args = argparse.Namespace(display=a.display, note="", ocr=False,
+                                               target=None, force_look=True)
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        look_rc = _look_locked(look_args, cancel_check, saved_paths)
+                finally:
+                    if saved_paths:
+                        protect = {anchor_path, saved_paths[-1]}
+                        progress["protect"] = protect
+                if cancel_check():
+                    return _batch_output(batch_id, size, results, index, "BATCH_CANCELLED", progress["protect"])
+                if look_rc != 0:
+                    return _batch_output(batch_id, size, results, index, "G1_OTHER", progress["protect"])
+                fresh = load_state().get("last_shot") or {}
+                if not anchor_fg or not _fg_same(fresh.get("fg"), anchor_fg):
+                    return _batch_output(batch_id, size, results, index, "G1_FOREGROUND", protect)
+                fresh_window_id = fresh.get("window_id")
+                if (type(anchor_window_id) is not int or anchor_window_id < 0 or
+                        type(fresh_window_id) is not int or fresh_window_id < 0 or
+                        fresh_window_id != anchor_window_id or
+                        any(d not in anchor_dialogs for d in (fresh.get("dialogs") or []))):
+                    return _batch_output(batch_id, size, results, index, "BATCH_WINDOW_CHANGED", protect)
+                shot = fresh.get("id")
+
+            action = argparse.Namespace(shot=shot, display=a.display, fast=False,
+                                        ack_no_zones=False, expect_activity=None,
+                                        allow_main=a.allow_main, why=a.why,
+                                        raw_input=a.raw_input, _batch_locked=True,
+                                        _batch_cancel_check=cancel_check,
+                                        _batch_anchor=anchor_path if index > 1 else None,
+                                        x=step.get("x"), y=step.get("y"),
+                                        node=step.get("node"), expect=step["expect"])
+            _BATCH_CONTEXT = {"batch_id": batch_id, "batch_index": index, "batch_size": size}
+            _BATCH_RECORDS = []
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    rc = cmd_tap(action)
+                if not _BATCH_RECORDS:
+                    audit({"kind": "tap", "allowed": False, "points": [],
+                           "reason": "批量步骤参数无效", "reason_code": "BATCH_STEP_INVALID",
+                           "dispatch_status": "not_submitted", "goal_verified": False})
+                record = _BATCH_RECORDS[-1]
+            except Exception as exc:
+                return _batch_output(batch_id, size, results, index,
+                                     "G5_AUDIT_FAILED" if isinstance(exc, OSError) else "OP_FAILED", protect)
+            finally:
+                _BATCH_CONTEXT = None
+                _BATCH_RECORDS = None
+            result = {"index": index, "kind": "tap", "allowed": record.get("allowed"),
+                      "dispatch_status": record.get("dispatch_status"),
+                      "ui_reacted": record.get("ui_reacted"),
+                      "act_before": record.get("act_before"), "act_after": record.get("act_after"),
+                      "reason_code": record.get("reason_code"),
+                      "r3_anchor": record.get("r3_anchor")}
+            results.append(result)
+            if rc != 0:
+                return _batch_output(batch_id, size, results, index,
+                                     record.get("reason_code") or "OP_FAILED", protect)
+            if record.get("ui_reacted") is not True:
+                return _batch_output(batch_id, size, results, index, "BATCH_NO_REACTION", protect)
+            if not anchor_fg or not _fg_same(record.get("act_after"), anchor_fg):
+                return _batch_output(batch_id, size, results, index, "G1_FOREGROUND", protect)
+    return _batch_output(batch_id, size, results, protect=protect)
 
 
 def cmd_zones(a):
@@ -2942,6 +3129,12 @@ if __name__ == "__main__":
         q.add_argument("--ack-no-zones", dest="ack_no_zones", action="store_true",
                        help="已废弃的调用方自述，不授予权限；覆盖不足时请人工接管")
         q.set_defaults(fn=fn)
+
+    q = sub.add_parser("batch", help="最多 6 步同屏独立动作（默认关闭）")
+    q.add_argument("--shot", required=True, help="第一步使用的 look 凭据")
+    q.add_argument("--steps", required=True, help='JSON 数组，步骤 kind 仅支持 tap')
+    q.add_argument("--display", type=int, default=0)
+    q.set_defaults(fn=cmd_batch)
 
     q = sub.add_parser("zones", help="看当前禁区"); q.set_defaults(fn=cmd_zones)
 
