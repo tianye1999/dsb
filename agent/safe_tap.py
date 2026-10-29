@@ -62,6 +62,7 @@ import contextlib
 import fcntl
 import io
 import json
+import math
 import os
 import re
 import shlex
@@ -147,30 +148,35 @@ DANGER_WORDS = [
 # ---------------------------------------------------------------- 基础
 
 class ActionDispatchError(Exception):
-    def __init__(self, reason, status="unknown", returncode=None):
+    def __init__(self, reason, status="unknown", returncode=None, output=b""):
         super().__init__(reason)
         self.reason, self.status, self.returncode = reason, status, returncode
+        self.output = output
 
 
 def sh(*a, t=90, checked=False):
+    return _sh(*a, t=t, checked=checked).decode("utf-8", "ignore")
+
+
+def _sh(*a, t=90, checked=False, binary=False, checked_limit=15, text_errors=True):
     receipt_nonce = os.urandom(32).hex()
     try:
-        result = subprocess.run(adb_command() + list(a), capture_output=True, timeout=min(t, 15) if checked else t,
+        result = subprocess.run(adb_command() + list(a), capture_output=True, timeout=min(t, checked_limit) if checked else t,
                                 env=dict(os.environ, DSB_ADB_RECEIPT_NONCE=receipt_nonce))
     except EndpointUnavailable as exc:
         raise ActionDispatchError(str(exc), 'not_submitted') from None
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         if checked:
-            raise ActionDispatchError("adb_timeout") from None
-        return ""
+            raise ActionDispatchError("adb_timeout", output=exc.stdout or b"") from None
+        return b""
     except FileNotFoundError:
         if checked:
             raise ActionDispatchError("adb_start_failed", "not_submitted") from None
-        return ""
+        return b""
     except Exception:
         if checked:
             raise ActionDispatchError("adb_transport_error") from None
-        return ""
+        return b""
     if result.returncode == 78:
         diagnostic = result.stderr.decode("utf-8", "replace")
         policy_message = next((line for line in diagnostic.splitlines()
@@ -180,11 +186,11 @@ def sh(*a, t=90, checked=False):
     output = result.stdout.decode("utf-8", "ignore")
     if checked:
         if result.returncode != 0:
-            raise ActionDispatchError("adb_nonzero", returncode=result.returncode)
-        diagnostic = output + "\n" + result.stderr.decode("utf-8", "ignore")
-        if re.search(r"\b(?:error|[a-z]*exception)\b|unknown command|permission denied", diagnostic, re.I):
-            raise ActionDispatchError("adb_error_output", returncode=0)
-    return output
+            raise ActionDispatchError("adb_nonzero", returncode=result.returncode, output=result.stdout)
+        diagnostic = ("" if binary else output) + "\n" + result.stderr.decode("utf-8", "ignore")
+        if text_errors and re.search(r"\b(?:error|[a-z]*exception)\b|unknown command|permission denied", diagnostic, re.I):
+            raise ActionDispatchError("adb_error_output", returncode=0, output=result.stdout)
+    return result.stdout
 
 
 
@@ -570,7 +576,7 @@ def vd_look_hint(display_id, fg):
 
 # ---------------------------------------------------------------- 截图 + 危险区
 
-def grab(path, force=False, display_id=0):
+def grab(path, force=False, display_id=0, foreground_out=None):
     """截图。优先走逗沙包 App 的原子观测（快、JPEG），失败回退 adb screencap（慢、PNG）。
 
     返回**实际落盘的路径**（扩展名随所用通道变化），失败返回 None。
@@ -588,10 +594,12 @@ def grab(path, force=False, display_id=0):
             base = base[: -len(ext)]
             break
     t0 = time.time()
-    obs = observe(with_image=True, force=force, display_id=display_id)
+    write_failed = False
+    obs = observe(with_image=True, force=force, display_id=display_id,
+                  **({"foreground_out": foreground_out} if foreground_out is not None else {}))
     if obs and obs.get("image") and not obs.get("err"):
         jp = base + ".jpg"
-        if save_look_jpg(obs.get("jpg") or "look.jpg", jp):
+        if _save_observed_jpg(obs, jp):
             LAST_GRAB = {"src": "app", "ms": round(time.time() - t0, 3),
                          "reused": bool(obs.get("reused")), "fallback": False,
                          "frame_ts": (obs.get("ts") or 0) / 1000.0,
@@ -604,10 +612,15 @@ def grab(path, force=False, display_id=0):
                          "window_id": obs.get("windowId", -1),
                          "interactive": obs.get("interactive")}
             return jp
-    if int(display_id) != 0:
+        write_failed = isinstance(obs.get("_jpg_bytes"), bytes) and len(obs["_jpg_bytes"]) >= 1000
+    if foreground_out is not None:
+        # A main-screen screencap fallback is a later frame and needs a later foreground query.
+        foreground_out.clear()
+    if int(display_id) != 0 or write_failed:
         # 虚拟屏没有 screencap 回退（会静默拿到主屏）；失败即失败。
         LAST_GRAB = {"src": "none", "ms": round(time.time() - t0, 3), "fallback": False,
-                     "error": "virtual_display_capture_failed", "display_id": int(display_id),
+                     "error": "image_write_failed" if write_failed else "virtual_display_capture_failed",
+                     "display_id": int(display_id),
                      "a_hash": "", "tree_hash": "", "ev_count": None,
                      "window_id": -1, "interactive": None}
         return None
@@ -678,7 +691,52 @@ def save_look_jpg(src_name, dest):
     return True
 
 
-def observe(with_image=True, timeout=OBS_TIMEOUT, force=False, display_id=0):
+def _shell_int(value):
+    if type(value) is not int:
+        raise ValueError("device shell value must be an integer")
+    return str(value)
+
+
+_BROADCAST = ("am broadcast -n com.dsb.assistant/.CmdReceiver -a com.dsb.assistant.CMD "
+              "--es token dsh-8f3a2c --es cmd ")
+_ORANGE = _BROADCAST + "'橙' >/dev/null 2>&1; "
+# Android mksh arithmetic wraps at 32 bits. Only elapsed differences of these
+# readings may be compared, never an absolute reading or an absolute deadline.
+_CLOCK_SH = ("now_ms() { read up rest < /proc/uptime || return; "
+             "frac=${up#*.}000; frac=${frac%\"${frac#???}\"}; "
+             "printf '%s\\n' \"$(( ${up%.*} * 1000 + 1$frac - 1000 ))\"; }; ")
+
+
+def _read_frame(raw, tag, pos=0):
+    end = raw.find(b"\n", pos)
+    header = raw[pos:end] if end >= 0 else b""
+    match = re.fullmatch(rb"DSB_" + tag.encode("ascii") + rb" ([0-9]+)", header)
+    if not match:
+        raise ValueError("missing frame marker")
+    length = int(match[1])
+    start = end + 1
+    if length > len(raw) - start:
+        raise ValueError("truncated frame")
+    return raw[start:start + length], start + length
+
+
+def _save_observed_jpg(obs, dest):
+    data = obs.get("_jpg_bytes")
+    if not isinstance(data, bytes) or len(data) < 1000:
+        return False
+    try:
+        directory = os.path.dirname(dest)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(dest, "wb") as f:
+            f.write(data)
+        return True
+    except OSError:
+        return False
+
+
+def observe(with_image=True, timeout=OBS_TIMEOUT, force=False, display_id=0,
+            foreground_out=None, cancel_check=None):
     """向逗沙包 App 要一次**原子观测**：截图 + 控件树 + 前台包名 + 时间戳，同一次调用产出。
 
     返回 dict；失败/超时返回 None —— 主屏调用方回退老的 screencap / uiautomator。
@@ -691,7 +749,8 @@ def observe(with_image=True, timeout=OBS_TIMEOUT, force=False, display_id=0):
 
     ⚠️ 命令值里不能有空格：adb 本地拼串、设备端 shell 会再切一次。统一用冒号分隔。
     """
-    did = int(display_id or 0)
+    did = display_id
+    _shell_int(did)
     nonce = str(int(time.time() * 1000))
     # force=True → 带 :f，要求 App 不做"过密复用"，必须真拍一帧
     if did == 0:
@@ -699,38 +758,83 @@ def observe(with_image=True, timeout=OBS_TIMEOUT, force=False, display_id=0):
     else:
         cmd = ("观测屏图:" if with_image else "观测屏树:") + str(did) + ":" + nonce \
               + (":f" if force else "")
-    try:
-        subprocess.run(adb_command() + ["shell", "am", "broadcast", "-n",
-                              "com.dsb.assistant/.CmdReceiver",
-                              "-a", "com.dsb.assistant.CMD",
-                              "--es", "token", LOOK_TOKEN,
-                              "--es", "cmd", cmd],
-                       capture_output=True, timeout=20)
-    except Exception:
-        return None
     path = (LOOK_DIR + "/look-" + nonce + ".json") if (with_image or did != 0) else LOOK_JSON
     t0 = time.time()
-    while time.time() - t0 < timeout:
-        raw = sh("shell", "cat", path, t=20)
-        if nonce in raw:
+    if not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout < 0:
+        raise ValueError("invalid observation timeout")
+    script = _CLOCK_SH
+    if cancel_check is not None:
+        script += cancel_check.before_capture_shell()
+    script += (_BROADCAST + shlex.quote(cmd) + " >/dev/null || exit $?; "
+               "t0=$(now_ms); "
+               "while [ $(( $(now_ms) - t0 )) -lt " + _shell_int(int(timeout * 1000)) + " ]; do "
+               "j=$(cat " + path + " 2>/dev/null); "
+               "case \"$j\" in *" + nonce + "*) break;; esac; sleep 0.05; done; "
+               "[ $(( $(now_ms) - t0 )) -lt " + _shell_int(int(timeout * 1000)) + " ] || exit 124; "
+               "printf 'DSB_JSON %s\\n' \"$(printf '%s' \"$j\" | wc -c | tr -d ' ')\"; "
+               "printf '%s' \"$j\"; ")
+    if with_image:
+        # The App closes the JPEG before publishing JSON. Reused frames name an older JPEG.
+        script += ("jpg=$(printf '%s' \"$j\" | sed -n 's/.*\"jpg\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p'); "
+                   "printf '%s\\n' \"$jpg\" | grep -Eq '^look-[0-9]+\\.jpg$' || exit 65; "
+                   "n=$(wc -c < " + LOOK_DIR + "/\"$jpg\") || exit 66; "
+                   "printf 'DSB_JPEG %s\\n' \"$(printf '%s' \"$n\" | tr -d ' ')\"; "
+                   "cat " + LOOK_DIR + "/\"$jpg\" || exit 66; ")
+    if foreground_out is not None:
+        # Must run after the frame has completed, never before the observation broadcast.
+        script += (_ORANGE + "fg=$(dumpsys activity activities) || exit $?; "
+                   "printf 'DSB_FOREGROUND %s\\n' \"$(printf '%s' \"$fg\" | wc -c | tr -d ' ')\"; "
+                   "printf '%s' \"$fg\"; ")
+    if cancel_check is not None:
+        script += cancel_check.after_capture_shell()
+    read_at = time.monotonic()
+    try:
+        raw = _sh("exec-out", script, t=20 + timeout,
+                  checked=True, binary=True, text_errors=False)
+        if cancel_check is not None and raw.startswith(b"DSB_CANCELLED "):
+            data, pos = _read_frame(raw, "CANCELLED")
+            if pos != len(raw):
+                return None
+            cancel_check.feed(data.decode("utf-8", "ignore"), read_at)
+            return None
+        data, pos = _read_frame(raw, "JSON")
+        d = json.loads(data)
+        expected_nonce = nonce + (":f" if did == 0 and not with_image and force else "")
+        if not isinstance(d, dict) or d.get("nonce") != expected_nonce:
+            return None
+        got = d.get("displayId", 0 if did == 0 else -1)
+        if type(got) is not int or got != did:
+            return None
+        if with_image:
+            jpg, pos = _read_frame(raw, "JPEG", pos)
+            if (not re.fullmatch(r"look-[0-9]+\.jpg", str(d.get("jpg") or ""))
+                    or type(d.get("jpgBytes")) is not int or d["jpgBytes"] != len(jpg)):
+                return None
+            d["_jpg_bytes"] = jpg
+        dump = None
+        if foreground_out is not None:
+            data, pos = _read_frame(raw, "FOREGROUND", pos)
+            dump = data.decode("utf-8", "ignore")
+        if cancel_check is not None:
+            data, pos = _read_frame(raw, "ABORT", pos)
+            cancel_check.feed(data.decode("utf-8", "ignore"), read_at)
+        if pos != len(raw):
+            return None
+        if isinstance(d.get("nodesRaw"), str):
             try:
-                d = json.loads(raw)
+                d["nodes"] = json.loads(d["nodesRaw"])
             except Exception:
-                return None
-            if isinstance(d.get("nodesRaw"), str):
-                try:
-                    d["nodes"] = json.loads(d["nodesRaw"])
-                except Exception:
-                    d["nodes"] = []
-            got = int(d.get("displayId", 0 if did == 0 else -1))
-            if got != did:
-                print("✗ 观测返回的 displayId=%s 与请求 %s 不一致（串屏保护）" % (got, did),
-                      file=sys.stderr)
-                return None
-            d["_elapsed"] = time.time() - t0
-            return d
-        time.sleep(0.05)
-    return None
+                d["nodes"] = []
+        if dump is not None:
+            foreground_out["dump"] = dump
+        d["_elapsed"] = time.time() - t0
+        return d
+    except ActionDispatchError as exc:
+        if exc.status == "not_submitted":
+            raise
+        return None
+    except (ValueError, TypeError, UnicodeError):
+        return None
 
 
 def _settle_stable(budget=2.5, interval=0.35, min_polls=2, display_id=0):
@@ -749,7 +853,10 @@ def _settle_stable(budget=2.5, interval=0.35, min_polls=2, display_id=0):
     polls = 0
     time.sleep(0.25)                      # 给动作本身一点生效时间
     while time.time() < deadline:
-        d = observe(with_image=False, force=True, display_id=display_id)
+        try:
+            d = observe(with_image=False, force=True, display_id=display_id)
+        except (ActionDispatchError, EndpointUnavailable, OSError):
+            d = None
         polls += 1
         if d:
             cur = (d.get("treeHash") or "", d.get("evCount"))
@@ -927,22 +1034,83 @@ def _danger_bands(zones, w, h):
     return [dict(z, rect=[0, z["rect"][1], w, z["rect"][3]], pad=pad) for z in zones]
 
 
-def _ocr_cancel_check():
-    flag = "/sdcard/Android/data/com.dsb.assistant/files/abort.flag"
-    initial = sh("shell", "cat", flag, t=1).strip()
-    next_check = [0.0]
-    stopped = [False]
-    def cancelled():
-        if stopped[0]:
+class _LookCancellation:
+    flag = LOOK_DIR + "/abort.flag"
+
+    def __init__(self):
+        self.started_ms = int(time.time() * 1000)
+        self.next_check = 0.0
+        self.stopped = False
+        self.reason = ""
+
+    def feed(self, current, read_at):
+        match = re.fullmatch(r"ABORT ([0-9]+)\s*", current)
+        if current and match is None:
+            self.stopped = True
+            self.reason = "abort flag format unrecognized"
+        elif match:
+            timestamp = match[1].lstrip("0") or "0"
+            started = str(self.started_ms)
+            self.stopped = self.stopped or (len(timestamp), timestamp) >= (len(started), started)
+        # Use the read's start, not delayed receipt/processing time, for OCR throttling.
+        self.next_check = read_at + .5
+        return self.stopped
+
+    def __call__(self):
+        if self.stopped:
             return True
         now = time.monotonic()
-        if now < next_check[0]:
+        if now < self.next_check:
             return False
-        next_check[0] = now + .5
-        current = sh("shell", "cat", flag, t=1).strip()
-        stopped[0] = bool(current and current != initial)
-        return stopped[0]
-    return cancelled
+        return self.read_now()
+
+    def read_now(self, pulse=False):
+        read_at = time.monotonic()
+        command = ((_ORANGE if pulse else "") + "if [ -e " + self.flag + " ]; then cat "
+                   + self.flag + " 2>/dev/null; fi")
+        try:
+            current = _sh("shell", command, t=10, checked=True, text_errors=False).decode("utf-8", "ignore")
+        except ActionDispatchError as exc:
+            if exc.returncode == 78 and exc.status == "not_submitted":
+                raise
+            self.stopped = True
+            self.reason = "无法读取取消标志（%s）" % exc.reason
+            return True
+        return self.feed(current, read_at)
+
+    def before_capture_shell(self):
+        # Preserve trailing whitespace for the same full-match rule as Python.
+        started = _shell_int(self.started_ms)
+        return ("ab=$(cat " + self.flag + " 2>/dev/null; printf '_'); ab=${ab%_}; "
+                'trimmed=${ab%"${ab##*[![:space:]]}"}; epoch=${trimmed#ABORT }; stop=0; '
+                'if [ -n "$ab" ]; then '
+                'if [ "$epoch" = "$trimmed" ]; then stop=1; else '
+                'case "$epoch" in ""|*[!0-9]*) stop=1;; '
+                # Compare normalized decimal strings, not overflowing epoch arithmetic.
+                '*) while [ "${epoch#0}" != "$epoch" ]; do epoch=${epoch#0}; done; '
+                'epoch=${epoch:-0}; '
+                'if [ "${#epoch}" -gt ' + str(len(started)) + ' ] || '
+                '{ [ "${#epoch}" -eq ' + str(len(started)) + ' ] && '
+                '! [[ "$epoch" < ' + started + ' ]]; }; then stop=1; fi;; esac; fi; fi; '
+                'if [ "$stop" -eq 1 ]; then '
+                "printf 'DSB_CANCELLED %s\\n' \"$(printf '%s' \"$ab\" | wc -c | tr -d ' ')\"; "
+                "printf '%s' \"$ab\"; exit 0; fi; ")
+
+    def after_capture_shell(self):
+        return ("ab=$(cat " + self.flag + " 2>/dev/null; printf '_'); ab=${ab%_}; "
+                "printf 'DSB_ABORT %s\\n' \"$(printf '%s' \"$ab\" | wc -c | tr -d ' ')\"; "
+                "printf '%s' \"$ab\"; ")
+
+
+def _cancelled_look(cancel_check):
+    result = {"status": "cancelled", "rows": []}
+    if isinstance(cancel_check, _LookCancellation) and cancel_check.reason:
+        result["reason"] = cancel_check.reason
+    return _observation_failure("cancelled", result)
+
+
+def _ocr_cancel_check():
+    return _LookCancellation()
 
 
 def _observation_failure(stage, result):
@@ -954,14 +1122,32 @@ def _observation_failure(stage, result):
 
 
 def cmd_look(a):
+    try:
+        return _cmd_look(a)
+    except ActionDispatchError as exc:
+        reason = "ADB policy paused: " if exc.returncode == 78 else "ADB observation failed: "
+        return _observation_failure(reason + exc.reason, {"status": "not_run", "rows": []})
+
+
+def _cmd_look(a):
     load_state()  # Refuse corrupt state before reading any device surface.
     cancel_check = _ocr_cancel_check()
     saved_paths = []
     with lock():
         previous_path = (load_state().get("last_shot") or {}).get("path")
-        if cancel_check():
-            return _observation_failure("cancelled", {"status": "cancelled", "rows": []})
-        rc = _look_locked(a, cancel_check, saved_paths)
+        display_id = int(getattr(a, "display", 0) or 0)
+        snapshot = None
+        if display_id and VD_OK and isinstance(cancel_check, _LookCancellation):
+            snapshot = _verification_snapshot(display_id, cancel_check)
+            if isinstance(snapshot[1], dict):
+                cancel_check.feed(snapshot[1]["abort"].removeprefix("\n").removesuffix("\n"),
+                                  snapshot[1]["_abort_read_at"])
+        cancelled = (cancel_check.stopped if isinstance(cancel_check, _LookCancellation)
+                     and snapshot is not None and isinstance(snapshot[1], dict) else cancel_check())
+        if cancelled:
+            return _cancelled_look(cancel_check)
+        rc = _look_locked(a, cancel_check, saved_paths,
+                          **({"snapshot": snapshot} if snapshot is not None else {}))
     if saved_paths:
         _prune_after_look({previous_path, saved_paths[-1]} - {None})
     return rc
@@ -989,7 +1175,7 @@ def _target_key(text):
     return "".join(text.split()).casefold()
 
 
-def _look_locked(a, cancel_check, saved_paths):
+def _look_locked(a, cancel_check, saved_paths, snapshot=None):
     target = getattr(a, "target", None)
     if target is not None:
         target = target.strip()
@@ -1004,7 +1190,7 @@ def _look_locked(a, cancel_check, saved_paths):
     if display_id != 0:
         if not VD_OK:
             return _observation_failure("vd_module_unavailable", {"status": "not_run", "rows": []})
-        vr = vd.verify()
+        vr = vd.verify(**({"snapshot": snapshot} if snapshot is not None else {}))
         if not vr.get("ok"):
             return _observation_failure("vd_" + str(vr.get("reason")), {"status": "not_run", "rows": []})
         vd_info = vr.get("session") or {}
@@ -1014,11 +1200,16 @@ def _look_locked(a, cancel_check, saved_paths):
     last_action = load_state().get("last_action_ts", 0)
     force_look = (getattr(a, "force_look", False) or (time.time() - last_action) < 3.0 or getattr(a, "ocr", False)
                   or target is not None or display_id != 0)
-    obs = observe(with_image=True, force=force_look, display_id=display_id)   # 一次原子观测：截图 + 控件树 同源同刻
+    look_foreground = {}
+    combined_cancel = cancel_check if isinstance(cancel_check, _LookCancellation) else None
+    obs = observe(with_image=True, force=force_look, display_id=display_id,
+                  foreground_out=look_foreground, cancel_check=combined_cancel)
+    if combined_cancel is not None and combined_cancel.stopped:
+        return _cancelled_look(cancel_check)
     path, src = None, ""
     if obs and obs.get("image") and not obs.get("err"):
         cand = os.path.join(SHOTS, f"shot-{sid}.jpg")
-        if save_look_jpg(obs.get("jpg") or "look.jpg", cand):
+        if _save_observed_jpg(obs, cand):
             path, src = cand, ("app-reused" if obs.get("reused") else "app")
     if path is None:
         if display_id != 0:
@@ -1061,7 +1252,9 @@ def _look_locked(a, cancel_check, saved_paths):
                                         {"status": "not_run", "rows": []})
     nodes = _nodes_from(obs) if obs else dump_nodes()
     # 闸门凭据的 fg 必须用 shell 版（格式 包名/Activity）；App 版只有包名，拿来比会永远不等
-    fg, main_fg_now = _foregrounds(display_id)
+    fg, main_fg_now = ((foreground(display_id, dump=look_foreground["dump"]),
+                       foreground(0, dump=look_foreground["dump"]))
+                      if "dump" in look_foreground else _foregrounds(display_id))
     if display_id != 0:
         # shell 与 App 两个来源都必须指向会话里的目标 App，否则就是跳屏 / ID 复用。
         # 例外：目标 App 拉起的系统选择器/授权框（同一块屏）。
@@ -1090,15 +1283,21 @@ def _look_locked(a, cancel_check, saved_paths):
             ocr_result = (pixel_recognize_result(path, float(cfg_get("ocr.min_confidence", 0.5)),
                           timeout_s=15, cancel_check=cancel_check) if OCR_OK
                           else {"status": "unavailable", "rows": []})
+        except ActionDispatchError as exc:
+            if exc.returncode == 78 and exc.status == "not_submitted":
+                raise
+            ocr_result = {"status": "error", "rows": []}
         except Exception:
             ocr_result = {"status": "error", "rows": []}
+        if combined_cancel is not None and combined_cancel.stopped:
+            return _cancelled_look(cancel_check)
         if ocr_result["status"] not in ("ok", "empty"):
             return _observation_failure("ocr_failed", ocr_result)
         pixel_nodes = ocr_result["rows"]
     elif needs_ocr:
         ocr_result = {"status": "disabled", "rows": []}
-    if cancel_check():
-        return _observation_failure("cancelled", {"status": "cancelled", "rows": []})
+    if (combined_cancel.stopped if combined_cancel is not None else cancel_check()):
+        return _cancelled_look(cancel_check)
     for row in pixel_nodes:                   # G2：危险词 × 像素文本
         for w in DANGER_WORDS:
             if w in row["text"]:
@@ -1109,7 +1308,8 @@ def _look_locked(a, cancel_check, saved_paths):
                               "pad": DANGER_PAD, "source": "pixels"})
                 break
     shot_black = bool(obs.get("black")) if obs else False
-    _ball("橙")          # 脉冲：让用户知道我正在操作（看门狗 120s 自动回蓝）
+    if combined_cancel is None:
+        _ball("橙")          # 脉冲：让用户知道我正在操作（看门狗 120s 自动回蓝）
     st = load_state()
     # 2026-10-01（App 批次一）：亮屏状态优先用 **App 快照里的 interactive** —— 省掉一次 dumpsys power 往返；
     # 只有走 screencap 回退（obs is None）时才去问 dumpsys。
@@ -1179,6 +1379,8 @@ def _look_locked(a, cancel_check, saved_paths):
                                   "visibleToUser": n.get("visibleToUser", True)}
                                  for n in (obs.get("nodes") or [])] if obs else []}
     # A new observation is not permission to repeat an exhausted action.
+    if combined_cancel is not None and combined_cancel.read_now(pulse=True):
+        return _cancelled_look(cancel_check)
     save_state(st)
     w, h = _screen_size_on(display_id)
     if display_id and (w, h) != (int((obs or {}).get("w") or 0), int((obs or {}).get("h") or 0)):
@@ -1307,7 +1509,7 @@ def _input_supports_display():
     return ("-d DISPLAY_ID" in _INPUT_D_HELP) or ("-d: specify the display ID" in _INPUT_D_HELP)
 
 
-def _check_display_binding(last, kind):
+def _check_display_binding(last, kind, snapshot=None):
     """虚拟屏凭据的额外前置：会话活着、帧来自 App、主屏没被动过、前台没变。
 
     全部 fail closed：任何一项无法确认都拒绝派发（不会"按主屏继续"）。
@@ -1332,7 +1534,7 @@ def _check_display_binding(last, kind):
     if not fg_pkg or app_pkg != fg_pkg:
         return False, "App 观测前台(%s)与 shell 前台(%s)不一致，拒绝派发" % (
             last.get("fg_app") or "-", last.get("fg") or "-")
-    v = vd.verify(last.get("vd_sid"))
+    v = vd.verify(last.get("vd_sid"), **({"snapshot": snapshot} if snapshot is not None else {}))
     if not v.get("ok"):
         return False, "虚拟屏会话失效：%s" % v.get("reason")
     sess = v.get("session") or {}
@@ -1369,7 +1571,22 @@ GESTURE_KINDS = frozenset(("swipe", "scroll", "drag", "long_press"))
 GESTURE_LIMIT = 16
 
 
-def _display_gesture_insets(display_id, h, w=0):
+_VD_INSETS = {}
+
+
+def _insets_session_key(display_id):
+    s = (vd.load_session() or {}) if VD_OK else {}
+    key = (s.get("sid"), display_id)
+    if (s.get("state") != "active" or not s.get("sid")
+            or s.get("displayId") != display_id or time.time() > float(s.get("expiresAt") or 0)):
+        _VD_INSETS.clear()
+        return None
+    if any(k != key for k in _VD_INSETS):
+        _VD_INSETS.clear()
+    return key
+
+
+def _display_gesture_insets(display_id, h, w=0, dump=None):
     """虚拟屏自己的底部系统手势/导航 inset（2026-10-21 F2）。
 
     实测：scrcpy `--no-vd-system-decorations` 建的屏在 `dumpsys window displays` 里**没有任何
@@ -1378,8 +1595,11 @@ def _display_gesture_insets(display_id, h, w=0):
     读不到/解析失败 → 回落 EDGE_BOTTOM（保守，等同旧行为）。
     """
     fallback = {"left": EDGE_X, "right": EDGE_X, "bottom": EDGE_BOTTOM, "source": "fallback"}
+    key = _insets_session_key(display_id) if display_id else None
+    if key is not None and key in _VD_INSETS:
+        return _VD_INSETS[key]
     try:
-        out = sh("shell", "dumpsys", "window", "displays")
+        out = dump if dump is not None else sh("shell", "dumpsys", "window", "displays")
         for part in re.split(r"(?m)^\s*Display: mDisplayId=", out or "")[1:]:
             head = part.split(None, 1)
             if not head or head[0] != str(display_id):
@@ -1396,7 +1616,10 @@ def _display_gesture_insets(display_id, h, w=0):
                 # 只有贴到屏幕底边、且是横条（宽≥屏宽一半）的才算底部 inset；横屏右侧竖条不算
                 if b > t and b >= h - 1 and t > 0 and (not w or (_r - _l) >= w // 2):
                     bottom = max(bottom, b - t)
-            return {"left": EDGE_X, "right": EDGE_X, "bottom": bottom, "source": "dumpsys"}
+            result = {"left": EDGE_X, "right": EDGE_X, "bottom": bottom, "source": "dumpsys"}
+            if key is not None:
+                _VD_INSETS[key] = result
+            return result
     except Exception:
         return fallback                               # 截断/异常输出一律回落保守值
     return fallback
@@ -1407,7 +1630,7 @@ R3_MAX_DIFF = 6.0     # 48×16 灰度缩略图平均差（0-255）。canary 虚�
                       # 静态两帧 0.0；单个数字变化 2.6–2.9（角标级，放行）；换成另一行 51–58（重排，拒绝）
 
 
-def _r3_verify(cred_img, display_id, pt, fresh_img=None):
+def _r3_verify(cred_img, display_id, pt, fresh_img=None, foreground_out=None):
     """派发前复核目标区域（R3）：现拍一帧，与凭据帧比对目标点所在的整行横带。
 
     行重排/内容替换 → 差异大 → 拒绝；拍不到/比不了 → 保守拒绝。只看目标附近一条，
@@ -1421,9 +1644,11 @@ def _r3_verify(cred_img, display_id, pt, fresh_img=None):
     os.makedirs(SHOTS, exist_ok=True)
     fresh = (fresh_img if fresh_img is not None else
              grab(os.path.join(SHOTS, "r3-%d.jpg" % int(time.time() * 1000)), force=True,
-                  display_id=display_id))
+                  display_id=display_id,
+                  **({"foreground_out": foreground_out} if foreground_out is not None else {})))
     if not fresh or not os.path.isfile(fresh):
-        return {"ok": False, "diff": None, "why": "capture_failed"}
+        return {"ok": False, "diff": None, "why": "capture_failed",
+                "write_failed": fresh_img is None and LAST_GRAB.get("error") == "image_write_failed"}
     try:
         ia = Image.open(cred_img).convert("L")
         ib = Image.open(fresh).convert("L")
@@ -1457,7 +1682,7 @@ def _long_press_ms(a):
     return ms
 
 
-def check_gate(a, kind, points):
+def check_gate(a, kind, points, snapshot=None, policy_foreground=None):
     """所有硬性检查集中在这里。返回 (ok, reason, shot)"""
     _GATE_EVIDENCE.clear()        # dsb_run 同进程多次动作：不得沿用上一次的判定
     st = load_state()
@@ -1477,7 +1702,7 @@ def check_gate(a, kind, points):
     if "consumed_at" in last:
         return False, "凭据已用于动作下发：请重新 look 并重新分析，不得重用或自动重试", last
 
-    ok_bind, why_bind = _check_display_binding(last, kind)
+    ok_bind, why_bind = _check_display_binding(last, kind, snapshot=snapshot)
     if not ok_bind:
         return False, why_bind, last
 
@@ -1492,7 +1717,8 @@ def check_gate(a, kind, points):
     if age > float(cfg_get("look.ttl", SHOT_TTL)):         # G1（可配置）
         return False, f"截图凭据已过期（{age:.0f}s > {SHOT_TTL:.0f}s）：请重新 look", last
 
-    fg_now = (_GATE_EVIDENCE.get("vd_fg") if display_id else None) or _foreground_on(display_id)
+    fg_now = (policy_foreground if display_id == 0 and policy_foreground is not None else
+              (_GATE_EVIDENCE.get("vd_fg") if display_id else None) or _foreground_on(display_id))
     if not _fg_same(fg_now, last["fg"]):                   # G1（按凭据所属显示器复核）
         fg_retry = _foreground_on(display_id)                  # 重取一次：吸收"恰好切页瞬间"的抖动
         if not _fg_same(fg_retry, last["fg"]):
@@ -1502,7 +1728,10 @@ def check_gate(a, kind, points):
     w, h = _screen_size_on(display_id)
     if display_id and (w, h) == (0, 0):
         return False, "拿不到虚拟屏尺寸（会话可能已失效），拒绝派发", last
-    ins = gesture_insets(w, h) if display_id == 0 else _display_gesture_insets(display_id, h, w)
+    ins = gesture_insets(w, h) if display_id == 0 else _display_gesture_insets(
+        display_id, h, w, dump=(snapshot[1].get("insets") if snapshot is not None
+                               and isinstance(snapshot[1], dict)
+                               and snapshot[0] == vd.load_session() else None))
     # swipe 的起点会被系统手势抢走，左右用**实测的 systemGestures 宽度**；tap 一般能穿过去，保持 EDGE_X。
     edge_l = max(EDGE_X, ins["left"]) if kind == "swipe" else EDGE_X
     edge_r = max(EDGE_X, ins["right"]) if kind == "swipe" else EDGE_X
@@ -1735,6 +1964,12 @@ def _dispatch_display_gesture(display_id, kind, points, a):
     - 回执超时 / cancelled / rejected 一律抛 ActionDispatchError → 审计记录真实原因，
       **不自动重试、不回退主屏 input**。
     """
+    _shell_int(display_id)
+    for point in points:
+        for value in (point if isinstance(point, (tuple, list)) else (point,)):
+            _shell_int(value)
+    if getattr(a, "ms", None) is not None:
+        _shell_int(a.ms)
     if kind == "key":
         sh("shell", "input", "-d", str(display_id), "keyevent", str(points[0]), checked=True)
         return {"channel": "input-d", "status": "completed"}
@@ -1755,28 +1990,35 @@ def _dispatch_display_gesture(display_id, kind, points, a):
     ms = max(40, min(3000, int(ms)))
     nonce = str(int(time.time() * 1000))
     cmd = "手势屏:%d:%s:%d:%d:%d:%d:%d:%s" % (display_id, kind, int(x1), int(y1), int(x2), int(y2), ms, nonce)
-    try:
-        subprocess.run(adb_command() + ["shell", "am", "broadcast", "-n",
-                              "com.dsb.assistant/.CmdReceiver",
-                              "-a", "com.dsb.assistant.CMD",
-                              "--es", "token", LOOK_TOKEN,
-                              "--es", "cmd", cmd],
-                       capture_output=True, timeout=20)
-    except Exception:
-        raise ActionDispatchError("gesture_broadcast_failed", "not_submitted")
     path = LOOK_DIR + "/gesture-" + nonce + ".json"
-    deadline = time.time() + 6
+    script = (_CLOCK_SH + _BROADCAST + shlex.quote(cmd) + " >/dev/null; rc=$?; "
+              "printf 'DSB_SUBMITTED\\n'; [ $rc -eq 0 ] || exit $rc; "
+              "t0=$(now_ms); j=''; "
+              "while [ $(( $(now_ms) - t0 )) -lt 6000 ]; do "
+              "j=$(cat " + path + " 2>/dev/null); "
+              "case \"$j\" in *" + nonce + "*) "
+              "if printf '%s' \"$j\" | grep -Eq '\"status\"[[:space:]]*:[[:space:]]*\"(completed|cancelled|rejected)\"'; "
+              "then break; fi;; esac; sleep 0.1; done; "
+              "printf 'DSB_RECEIPT %s\\n' \"$(printf '%s' \"$j\" | wc -c | tr -d ' ')\"; "
+              "printf '%s' \"$j\"")
     rec = {}
-    while time.time() < deadline:
-        raw = sh("shell", "cat", path, t=10)
-        if nonce in raw:
-            try:
-                rec = json.loads(raw)
-            except Exception:
-                rec = {}
-            if rec.get("status") in ("completed", "cancelled", "rejected"):
-                break
-        time.sleep(0.1)
+    try:
+        raw = _sh("exec-out", script, t=15, checked=True)
+    except ActionDispatchError as exc:
+        if exc.reason == "adb_timeout" and exc.output.startswith(b"DSB_SUBMITTED\n"):
+            raise ActionDispatchError("gesture_timeout", "timeout") from None
+        raise
+    if not raw.startswith(b"DSB_SUBMITTED\n"):
+        raise ActionDispatchError("gesture_broadcast_failed", "unknown")
+    try:
+        data, end = _read_frame(raw, "RECEIPT", len(b"DSB_SUBMITTED\n"))
+        if end != len(raw):
+            raise ValueError("trailing receipt output")
+        rec = json.loads(data)
+        if not isinstance(rec, dict) or rec.get("nonce") != nonce:
+            rec = {}
+    except (ValueError, TypeError):
+        rec = {}
     status = rec.get("status") or "timeout"
     if status != "completed":
         raise ActionDispatchError("gesture_" + status, status)
@@ -1786,10 +2028,41 @@ def _dispatch_display_gesture(display_id, kind, points, a):
             "receipt": {"displayId": rec.get("displayId"), "kind": rec.get("kind")}}
 
 
+def _verification_snapshot(display_id, cancel_check=None):
+    s = vd.load_session() or {}
+    queries = vd.verification_queries(s, integer_literals=True)
+    key = _insets_session_key(display_id)
+    if key is None or key not in _VD_INSETS:
+        queries.append(("insets", "dumpsys window displays 2>/dev/null; :"))
+    if cancel_check is not None:
+        queries.append(("abort", "cat " + LOOK_DIR + "/abort.flag 2>/dev/null || :"))
+    def query(*args, **kwargs):
+        # Dumpsys diagnostics belong to verify's existing per-query checks, not
+        # the dispatch text-error heuristic. Keep transport/policy handling shared.
+        return _sh(*args, **kwargs, binary=True, checked_limit=20, text_errors=False).decode("utf-8", "ignore")
+    try:
+        read_at = time.monotonic()
+        q = vd.adb_batch(queries, run=query)
+        if cancel_check is not None:
+            q["_abort_read_at"] = read_at
+    except ActionDispatchError as exc:
+        if exc.returncode == 78 and exc.status == "not_submitted":
+            raise
+        # Acquisition is early, but a failed query is judged at the original VD gate.
+        q = vd.VDError("adb_missing" if exc.reason == "adb_start_failed" else exc.reason)
+    except vd.VDError as exc:
+        q = exc
+    return s, q
+
+
 def _do_action_locked(a, kind, points):
     # ① 虚拟屏策略最先判（2026-10-20）：主屏上操作别的 App 直接拒绝，连凭据都不看。
     _did = int(getattr(a, "display", 0) or 0)
-    _blk = vd_policy_block(kind, _did, _foreground_on(_did),
+    snapshot = _verification_snapshot(_did) if _did and VD_OK else None
+    policy_fg = (foreground(_did, dump=snapshot[1].get("activities", ""))
+                 if snapshot is not None and isinstance(snapshot[1], dict) else
+                 "" if snapshot is not None else _foreground_on(_did))
+    _blk = vd_policy_block(kind, _did, policy_fg,
                            allow_main=bool(getattr(a, "allow_main", False)),
                            why=getattr(a, "why", None))
     if _blk:
@@ -1804,7 +2077,8 @@ def _do_action_locked(a, kind, points):
         if _tag == "vd_required":
             print("   本次未下发任何动作。", file=sys.stderr)
         return 2
-    ok, reason, last = check_gate(a, kind, points)
+    ok, reason, last = check_gate(a, kind, points, **({"snapshot": snapshot} if snapshot is not None else
+                                                   {"policy_foreground": policy_fg} if _did == 0 else {}))
     if not ok:
         return _refuse_action(a, kind, points, last, reason)
     display_id = int(getattr(a, "display", 0) or 0)
@@ -1838,10 +2112,13 @@ def _do_action_locked(a, kind, points):
         os.makedirs(SHOTS, exist_ok=True)
         before = grab(before, display_id=display_id) or before
         before_meta = dict(LAST_GRAB)
+        if before_meta.get("error") == "image_write_failed":
+            return _observation_failure("capture_failed", {"status": "error", "rows": []})
     # R3（2026-10-21，owner 授权）：派发前现拍一帧，与凭据帧比对目标点所在横带。
     # 放在下面的前台/时效核对之前：拍帧要时间，核对必须发生在拍帧之后。
     # 真实事故：飞书发文件时群列表在 look 与 tap 之间重排，两次点错群——G1 只核前台，管不到同页内容变化。
     r3 = None
+    before_foreground = {}
     if kind in ("tap", "long_press"):
         anchor = getattr(a, "_batch_anchor", None)
         if anchor is not None:
@@ -1851,13 +2128,16 @@ def _do_action_locked(a, kind, points):
                 return _refuse_action(a, kind, points, last,
                                       "派发前目标所在行与观测时不一致（%s）：批量首帧与本步画面不同；"
                                       "请重新 look 并分析，不得自动重试。" % (anchored.get("why") or "?"))
-        r3 = _r3_verify(cred_img, display_id, points[0])
+        r3 = _r3_verify(cred_img, display_id, points[0], foreground_out=before_foreground)
         _GATE_EVIDENCE["r3"] = r3
         if not r3.get("ok"):
+            if r3.get("write_failed"):
+                return _observation_failure("capture_failed", {"status": "error", "rows": []})
             return _refuse_action(a, kind, points, last,
                                   "派发前目标所在行与观测时不一致（%s）：页面在看完之后变了，动作未下发；"
                                   "请重新 look 并分析，不得自动重试。" % (r3.get("why") or "?"))
-    fg_before = _foreground_on(display_id)
+    fg_before = (foreground(display_id, dump=before_foreground["dump"])
+                 if "dump" in before_foreground else _foreground_on(display_id))
     # Evidence preparation can outlive the gate check. Reject a change already
     # observed here; this is not an atomic Android compare-and-inject guarantee.
     if not fg_before or not _fg_same(fg_before, last.get("fg")):
@@ -1890,9 +2170,19 @@ def _do_action_locked(a, kind, points):
         state[history] = state.get(history, [])[-REPEAT_HISTORY_LIMIT:]
     save_state(state)
     batch_cancel_check = getattr(a, "_batch_cancel_check", None)
-    if batch_cancel_check is not None and batch_cancel_check():
-        return _refuse_action(a, kind, points, last, "批量任务已取消；动作未下发。",
-                              reason_code="BATCH_CANCELLED")
+    if batch_cancel_check is not None:
+        try:
+            cancelled = batch_cancel_check()
+        except ActionDispatchError as exc:
+            if exc.returncode == 78 and exc.status == "not_submitted":
+                raise
+            return _refuse_action(a, kind, points, last,
+                                  "无法读取取消标志，动作未下发（%s）。" % exc.reason,
+                                  reason_code="BATCH_CANCELLED")
+        if cancelled:
+            reason = getattr(batch_cancel_check, "reason", "") or "批量任务已取消"
+            return _refuse_action(a, kind, points, last, reason + "；动作未下发。",
+                                  reason_code="BATCH_CANCELLED")
     gesture_info = {}
     if kind == "type":
         gesture_info = _dispatch_type(display_id, a)
@@ -1975,18 +2265,36 @@ def _do_action_locked(a, kind, points):
     # 证据帧必然拍在稳定后。--fast 只是把预算从 2.5s 降到 1.2s。
     settle_budget = float(cfg_get("action.settle_budget_fast" if fast else "action.settle_budget",
                                  1.2 if fast else 2.5))
-    settle_ms, settle_polls, settled = _settle_stable(budget=settle_budget, display_id=display_id)
-    fg_after = _foreground_on(display_id)
+    settle_start = time.time()
+    try:
+        settle_ms, settle_polls, settled = _settle_stable(budget=settle_budget, display_id=display_id)
+    except (ActionDispatchError, EndpointUnavailable, OSError):
+        settle_ms, settle_polls, settled = round((time.time() - settle_start) * 1000), 0, False
+    after_foreground = {}
+    after = ""
+    after_meta = {"src": "none"}
     if fast:
-        ao = observe(with_image=False, display_id=display_id)
-        after = ""
+        try:
+            ao = observe(with_image=False, display_id=display_id, foreground_out=after_foreground)
+        except (ActionDispatchError, EndpointUnavailable, OSError):
+            ao = None
+            after_foreground.clear()
         after_meta = {"src": "fast",
                       "tree_hash": (ao or {}).get("treeHash") or "",
                       "ev_count": (ao or {}).get("evCount")}
     else:
-        after = os.path.join(SHOTS, f"after-{int(time.time()*1000)}.jpg")
-        after = grab(after, force=True, display_id=display_id) or after   # 动作后留证必须真拍
-        after_meta = dict(LAST_GRAB)
+        after_path = os.path.join(SHOTS, f"after-{int(time.time()*1000)}.jpg")
+        try:
+            after = grab(after_path, force=True, display_id=display_id,
+                         foreground_out=after_foreground) or ""   # 动作后留证必须真拍
+            after_meta = dict(LAST_GRAB)
+        except (ActionDispatchError, EndpointUnavailable, OSError):
+            after_foreground.clear()
+    try:
+        fg_after = (foreground(display_id, dump=after_foreground["dump"])
+                    if "dump" in after_foreground else _foreground_on(display_id))
+    except (ActionDispatchError, EndpointUnavailable, OSError):
+        fg_after = ""
     # type：输入框常只露出文字尾部（实测"文件传输助手"在微信搜索框只显示"输助手"），读回按尾部比对；
     # 只是提示，goal_verified 仍为 False。
     readback = (_type_readback(after, getattr(a, "text", "") or "",

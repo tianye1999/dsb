@@ -71,7 +71,7 @@ class Batch(unittest.TestCase):
                             ("audit", REAL_AUDIT), ("AUDIT", self.audit_path),
                             ("_look_locked", REAL_LOOK), ("_r3_verify", REAL_R3),
                             ("observe", observe), ("grab", grab),
-                            ("save_look_jpg", lambda src, dest: bool(frame(dest, self.width)))):
+                            ("_save_observed_jpg", lambda obs, dest: bool(frame(dest, self.width)))):
             p = patch.object(st, name, value)
             p.start()
             self.addCleanup(p.stop)

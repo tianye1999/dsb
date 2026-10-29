@@ -111,9 +111,9 @@ class Repetition(unittest.TestCase):
     def test_verified_foreground_transition_does_not_count_as_stuck_tap(self):
         for _ in range(3):
             self.look()
-            # Reads: policy preflight, gate, pre-dispatch, post-action.
+            # Policy and gate share one read; pre-dispatch and post-action stay live.
             with patch.object(st, "foreground", side_effect=[
-                    "test/.Page", "test/.Page", "test/.Page", "other/.Page"]):
+                    "test/.Page", "test/.Page", "other/.Page"]):
                 self.assertEqual(self.action(), 0)
         self.assertTrue(all(t["changed"] for t in st.load_state()["taps"]))
 
@@ -128,7 +128,7 @@ class Repetition(unittest.TestCase):
         for _ in range(2):
             self.look()
             with patch.object(st, "foreground", side_effect=[
-                    "test/.Page", "test/.Page", "test/.Page", ""]):
+                    "test/.Page", "test/.Page", ""]):
                 self.assertEqual(self.action(), 0)
         self.look()
         self.assertEqual(self.action(), 2)

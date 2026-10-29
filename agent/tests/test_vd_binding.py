@@ -113,6 +113,8 @@ class _GateBase(unittest.TestCase):
             "HERE": self.tmp, "SHOTS": self.tmp, "sh": self.shell,
             "EXTRA_ZONES": os.path.join(self.tmp, "zones.json"),
             "audit": self.audits.append, "_INPUT_D_HELP": "-d DISPLAY_ID",
+            "_VD_INSETS": {},
+            "_verification_snapshot": lambda *a, **kw: None,
             "_ball": lambda *a: None, "_ocr_cancel_check": lambda: lambda: False,
             # R3 由 test_safe_tap_r3.py 覆盖（这里没有真实截图）
             "_r3_verify": lambda *a, **kw: {"ok": True, "diff": 0.0, "why": ""},
@@ -282,7 +284,7 @@ class VdGateTests(_GateBase):
                "fg": "com.obric.calculator", "nodes": [], "interactive": True,
                "ts": self.now * 1000}
         with patch.object(st, "observe", return_value=obs), \
-                patch.object(st, "save_look_jpg", return_value=True), \
+                patch.object(st, "_save_observed_jpg", return_value=True), \
                 patch.object(st, "OCR_OK", True), \
                 patch.object(st, "pixel_recognize_result", return_value={
                     "status": "empty", "rows": []}) as ocr, \
@@ -477,6 +479,7 @@ class VdGateTests(_GateBase):
     def test_virtual_display_bottom_band_uses_own_insets(self):
         for bottom in (0, 24, 59, 60, 84):
             with self.subTest(bottom=bottom):
+                st._VD_INSETS.clear()  # Each synthetic window dump represents a fresh session.
                 self.windows = DUMP_WINDOW_DISPLAYS
                 if bottom:
                     self.windows += ("  InsetsSource type=mandatorySystemGestures "

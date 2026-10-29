@@ -29,9 +29,9 @@ class Foreground(unittest.TestCase):
                 with self.subTest(kind=kind, fast=fast, foreground=foreground):
                     self.reset()
                     before = st.load_state()
-                    # Reads: policy preflight, gate, pre-dispatch, post-action.
+                    # Policy and gate share one read; pre-dispatch and post-action remain live.
                     with patch.object(st, "foreground", side_effect=[
-                            "test/.Page", "test/.Page", foreground, foreground]), \
+                            "test/.Page", foreground, foreground]), \
                             patch.object(st, "audit") as audit, \
                             patch.object(st, "_settle_stable", return_value=(0, 1, True)) as settle:
                         self.assertEqual(self.invoke(kind, fast), 2)
@@ -62,7 +62,7 @@ class Foreground(unittest.TestCase):
                     with self.subTest(kind=kind, fast=fast, foreground=foreground):
                         self.reset()
                         with patch.object(st, "foreground", side_effect=[
-                                "test/.Page", "test/.Page", foreground, foreground]):
+                                "test/.Page", foreground, foreground]):
                             self.assertEqual(self.invoke(kind, fast), 0)
                         self.assertEqual(len(self.calls), 1)
                         self.assertIn("consumed_at", st.load_state()["last_shot"])
@@ -70,7 +70,7 @@ class Foreground(unittest.TestCase):
     def test_refusal_audit_failure_never_dispatches(self):
         before = st.load_state()
         with patch.object(st, "foreground", side_effect=[
-                "test/.Page", "test/.Page", "other/.Page", "other/.Page"]), \
+                "test/.Page", "other/.Page", "other/.Page"]), \
                 patch.object(st, "audit", side_effect=OSError("audit unavailable")):
             with self.assertRaisesRegex(OSError, "audit unavailable"):
                 self.invoke("tap", True)
