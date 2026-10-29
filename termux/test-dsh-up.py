@@ -1,8 +1,10 @@
 """Run the real startup scripts with offline curl/port/process substitutes."""
 
+import fcntl
 import json
 import os
 import pathlib
+import select
 import shutil
 import subprocess
 import sys
@@ -14,6 +16,35 @@ ROOT = pathlib.Path(os.environ.get('DSB_TEST_SOURCE_ROOT', pathlib.Path(__file__
 SCRIPTS = ('termux/dsh-up.sh', 'app/termux/dsh-up.sh')
 OLD_URL = 'http://127.0.0.1:3080/?token=offline_existing'
 NEW_URL = 'http://127.0.0.1:3080/?token=offline_restarted'
+
+FAKE_FLOCK = '''import fcntl
+import sys
+
+if sys.argv[1:] != ['-n', '9']:
+    raise SystemExit('unexpected flock arguments')
+try:
+    fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    raise SystemExit(1)
+'''
+
+
+def install_fake_flock(binary):
+    fake = binary / 'flock'
+    fake.write_text('#!' + sys.executable + '\n' + FAKE_FLOCK)
+    fake.chmod(0o755)
+
+
+def lock_is_free(lock):
+    if not lock.exists():
+        return True
+    with lock.open('a') as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        fcntl.flock(handle, fcntl.LOCK_UN)
+    return True
 
 FAKE_COMMAND = r'''import json
 import os
@@ -50,10 +81,18 @@ elif name == 'pkill':
 elif name == 'setsid':
     (root / 'stopped').unlink(missing_ok=True)
     (root / 'started').touch()
+    if scenario.get('delayed_new_url'):
+        time.sleep(0.06)
     print('http://127.0.0.1:3080/?token=offline_restarted', flush=True)
 elif name == 'sleep':
     # Give the fake background starter a scheduling opportunity without waiting seconds.
     time.sleep(0.005)
+    if scenario.get('external_new_after_sleeps'):
+        sleeps = sum(e['command'] == 'sleep' for e in events) + 1
+        if sleeps >= 2 and not (root / 'external_url_written').exists():
+            (root / 'home' / 'dsh-web.log').open('a').write(
+                'http://127.0.0.1:3080/?token=offline_restarted\n')
+            (root / 'external_url_written').touch()
 elif name == 'ready-probe.sh':
     pass
 else:
@@ -62,7 +101,8 @@ else:
 
 
 class StartupChecks(unittest.TestCase):
-    def run_startup(self, relative, responses, port_open=True):
+    def run_startup(self, relative, responses, port_open=True, stale_lock=False,
+                    **scenario_options):
         with tempfile.TemporaryDirectory(prefix='dsb-up-offline-') as directory:
             root = pathlib.Path(directory)
             home, binary = root / 'home', root / 'bin'
@@ -71,17 +111,21 @@ class StartupChecks(unittest.TestCase):
             (root / 'scenario.json').write_text(json.dumps({
                 'port_open': port_open,
                 'responses': responses,
+                **scenario_options,
             }))
             (home / 'dsh-web.log').write_text(OLD_URL + '\n')
+            if stale_lock:
+                (home / 'dsb/.dsh-up.lock').write_text(str(os.getpid()) + '\n')
             (home / '.dsb-web-url').write_text(OLD_URL + '\n')
             (home / '.dsh-web-token').write_text(OLD_URL + '\n')
             fake = binary / 'fake-command'
             fake.write_text('#!' + sys.executable + '\n' + FAKE_COMMAND)
             fake.chmod(0o755)
+            install_fake_flock(binary)
             for command in ('python3', 'curl', 'pkill', 'setsid', 'sleep'):
                 (binary / command).symlink_to(fake)
             (home / 'dsb' / 'ready-probe.sh').symlink_to(fake)
-            for command in ('grep', 'tail'):
+            for command in ('grep', 'tail', 'wc'):
                 (binary / command).symlink_to(shutil.which(command))
 
             # Preserve the production logic; redirect only its fixed Termux paths.
@@ -96,13 +140,16 @@ class StartupChecks(unittest.TestCase):
             env = dict(os.environ, DSB_UP_FIXTURE=str(root), PATH=str(binary) + os.pathsep + os.environ['PATH'])
             result = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True, timeout=15)
             events_file = root / 'events.jsonl'
-            events = [json.loads(line) for line in events_file.read_text().splitlines()]
+            events = ([json.loads(line) for line in events_file.read_text().splitlines()]
+                      if events_file.exists() else [])
+            lock = home / 'dsb/.dsh-up.lock'
             return {
                 'result': result,
                 'events': events,
                 'url': (home / '.dsb-web-url').read_text().strip(),
                 'token': (home / '.dsh-web-token').read_text().strip(),
-                'lock_exists': (home / 'dsb' / '.dsh-up.lock').exists(),
+                'lock_free': lock_is_free(lock),
+                'log': (home / 'dsh-web.log').read_text(),
             }
 
     def count(self, outcome, command):
@@ -118,7 +165,7 @@ class StartupChecks(unittest.TestCase):
         self.assertEqual(self.count(outcome, 'setsid'), 0, 'a live web process must not be restarted')
         self.assertGreaterEqual(self.count(outcome, 'curl'), min_checks)
         self.assertLessEqual(self.count(outcome, 'curl'), 6, 'URL checks must stay bounded')
-        self.assertFalse(outcome['lock_exists'])
+        self.assertTrue(outcome['lock_free'])
 
     def test_existing_valid_url_does_not_restart(self):
         for relative in SCRIPTS:
@@ -153,7 +200,7 @@ class StartupChecks(unittest.TestCase):
                     self.assertEqual(self.count(outcome, 'setsid'), 0)
                     self.assertGreaterEqual(self.count(outcome, 'curl'), 2)
                     self.assertLessEqual(self.count(outcome, 'curl'), 6)
-                    self.assertFalse(outcome['lock_exists'])
+                    self.assertTrue(outcome['lock_free'])
 
     def test_confirmed_unauthorized_url_restarts_once_and_publishes_new_token(self):
         for relative in SCRIPTS:
@@ -166,7 +213,7 @@ class StartupChecks(unittest.TestCase):
                 self.assertEqual(outcome['token'], NEW_URL)
                 self.assertEqual(self.count(outcome, 'pkill'), 1)
                 self.assertEqual(self.count(outcome, 'setsid'), 1)
-                self.assertFalse(outcome['lock_exists'])
+                self.assertTrue(outcome['lock_free'])
 
     def test_closed_port_starts_web_and_publishes_verified_token(self):
         for relative in SCRIPTS:
@@ -178,7 +225,112 @@ class StartupChecks(unittest.TestCase):
                 self.assertEqual(outcome['url'], NEW_URL)
                 self.assertEqual(outcome['token'], NEW_URL)
                 self.assertEqual(self.count(outcome, 'setsid'), 1)
-                self.assertFalse(outcome['lock_exists'])
+                self.assertTrue(outcome['lock_free'])
+
+    def test_closed_port_ignores_old_url_until_new_start_writes_one(self):
+        for relative in SCRIPTS:
+            with self.subTest(script=relative):
+                outcome = self.run_startup(relative, [['401', 0]], port_open=False,
+                                           delayed_new_url=True)
+                self.assertEqual(outcome['result'].returncode, 0, outcome['result'].stderr)
+                self.assertEqual(outcome['result'].stdout.strip(), NEW_URL)
+                self.assertEqual(outcome['url'], NEW_URL)
+                self.assertEqual(outcome['token'], NEW_URL)
+                self.assertEqual(outcome['log'], OLD_URL + '\n' + NEW_URL + '\n')
+                self.assertEqual(self.count(outcome, 'pkill'), 0)
+                self.assertEqual(self.count(outcome, 'setsid'), 1)
+                self.assertTrue(outcome['lock_free'])
+
+    def test_stale_lock_with_reused_pid_does_not_skip_startup(self):
+        for relative in SCRIPTS:
+            with self.subTest(script=relative):
+                outcome = self.run_startup(relative, [['000', 7]], port_open=False,
+                                           stale_lock=True)
+                self.assertEqual(outcome['result'].returncode, 0, outcome['result'].stderr)
+                self.assertEqual(outcome['result'].stdout.strip(), NEW_URL)
+                self.assertEqual(outcome['url'], NEW_URL)
+                self.assertEqual(self.count(outcome, 'setsid'), 1)
+                self.assertTrue(outcome['lock_free'])
+
+    def test_existing_listener_waits_for_new_url_after_old_token_is_rejected(self):
+        for relative in SCRIPTS:
+            with self.subTest(script=relative):
+                outcome = self.run_startup(relative, [['401', 0]],
+                                           external_new_after_sleeps=True)
+                self.assertEqual(outcome['result'].returncode, 0, outcome['result'].stderr)
+                self.assertEqual(outcome['result'].stdout.strip(), NEW_URL)
+                self.assertEqual(outcome['log'], OLD_URL + '\n' + NEW_URL + '\n')
+                self.assertEqual(self.count(outcome, 'pkill'), 0)
+                self.assertEqual(self.count(outcome, 'setsid'), 0)
+
+
+class SupervisorChecks(unittest.TestCase):
+    def run_one_iteration(self, lock_state):
+        with tempfile.TemporaryDirectory(prefix='dsb-supervisor-offline-') as directory:
+            home = pathlib.Path(directory)
+            binary = home / 'bin'
+            (home / 'wx').mkdir()
+            (home / 'dsb').mkdir()
+            binary.mkdir()
+            install_fake_flock(binary)
+            lock = home / 'dsb/.dsh-up.lock'
+            holder = None
+            if lock_state == 'stale':
+                lock.write_text(str(os.getpid()) + '\n')
+            elif lock_state == 'held':
+                fake_dsh_up = home / 'fake-dsh-up.py'
+                fake_dsh_up.write_text(
+                    'import fcntl, os, pathlib, sys\n'
+                    'with pathlib.Path(sys.argv[1]).open("a") as lock:\n'
+                    '    fcntl.flock(lock, fcntl.LOCK_EX)\n'
+                    '    lock.seek(0)\n'
+                    '    lock.truncate()\n'
+                    '    lock.write(str(os.getpid()) + "\\n")\n'
+                    '    lock.flush()\n'
+                    '    print("ready", flush=True)\n'
+                    '    sys.stdin.read()\n')
+                holder = subprocess.Popen([sys.executable, str(fake_dsh_up), str(lock)],
+                                          stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                          stderr=subprocess.PIPE, text=True)
+                ready, _, _ = select.select([holder.stdout], [], [], 5)
+                self.assertTrue(ready, 'fake dsh-up did not acquire its flock')
+                self.assertEqual(holder.stdout.readline().strip(), 'ready')
+            (home / 'wx/wx_adb_connect.sh').write_text('#!/bin/bash\nexit 0\n')
+            script = ROOT / 'termux/supervisor.sh'
+            try:
+                result = subprocess.run([
+                    'bash', '-c',
+                    'pgrep() { return 0; }; '
+                    'python3() { return 1; }; '
+                    'setsid() { printf "%s\\n" "$*" >> "$HOME/starts"; }; '
+                    'sleep() { wait; exit 0; }; '
+                    'source "$1"',
+                    'offline-supervisor', str(script),
+                ], env=dict(os.environ, HOME=str(home),
+                            PATH=str(binary) + os.pathsep + os.environ['PATH']),
+                    capture_output=True, text=True, timeout=5)
+            finally:
+                if holder is not None:
+                    holder.communicate(timeout=5)  # closes stdin, which ends the fake holder
+            starts = home / 'starts'
+            return result, starts.read_text().splitlines() if starts.exists() else []
+
+    def test_dsh_up_live_lock_prevents_duplicate_web_start(self):
+        result, starts = self.run_one_iteration(lock_state='held')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(starts, [])
+
+    def test_no_dsh_up_lock_allows_web_start_when_port_is_closed(self):
+        result, starts = self.run_one_iteration(lock_state='missing')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(starts), 1, starts)
+        self.assertIn('/wx/start-dsh.sh', starts[0])
+
+    def test_stale_lock_with_reused_pid_allows_web_start(self):
+        result, starts = self.run_one_iteration(lock_state='stale')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(starts), 1, starts)
+        self.assertIn('/wx/start-dsh.sh', starts[0])
 
 
 class ManualBootAdbChecks(unittest.TestCase):

@@ -515,6 +515,24 @@ public class WebViewRecoveryTest {
             for (String entry : Log.entries)
                 check(!entry.contains("fixture-secret") && !entry.contains("token="), "network error log leaked private URL");
         });
+        test("cached URL retries every second and respect the recovery deadline", () -> {
+            Harness h = new Harness(); h.nextUrl = null; h.error(true);
+            for (int attempt = 0; attempt < 5; attempt++) {
+                Handler.Pending retry = Handler.pending.stream()
+                    .filter(p -> p.runnable == h.retryReensure).findFirst().orElseThrow();
+                check(retry.due - Clock.now == 1000,
+                    "cached URL retry " + attempt + " must wait exactly one second");
+                Handler.advance(1000);
+                Thread.drain();
+            }
+            Harness late = new Harness();
+            late.recoveryStartedAt = Clock.now - (Harness.RECOVERY_WINDOW_MS - 375);
+            late.maybeReensure();
+            Handler.Pending finalRetry = Handler.pending.stream()
+                .filter(p -> p.runnable == late.retryReensure).findFirst().orElseThrow();
+            check(finalRetry.due - Clock.now == 375,
+                "final cached URL retry must be clipped to the remaining recovery window");
+        });
         System.out.println("WEBVIEW_RECOVERY_TESTS passed=" + passed + " failed=" + failed);
         if (failed != 0) throw new AssertionError("WebView recovery regressions: " + failed);
     }
