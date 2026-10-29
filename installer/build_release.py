@@ -35,14 +35,14 @@ def committed_sources():
 
 
 def stage_sources(stage, data):
-    prefixes = ('installer/', 'hardening/', 'agent/', 'bridge/', 'termux/', 'dsh-config/', 'dsh-web-tweaks/')
+    prefixes = ('installer/', 'hardening/', 'agent/', 'bridge/', 'termux/', 'dsh-config/', 'dsh-web-tweaks/', 'dsh-plugin/')
     docs = {'README.md', 'README.zh-CN.md', 'docs/INSTALL.md', 'docs/INSTALL.zh-CN.md', 'docs/THREAT-MODEL.md', 'docs/THREAT-MODEL.zh-CN.md', 'hardening/adb-private/README.md', 'hardening/adb-private/README.zh-CN.md', 'agent/SKILL.md'}
     with tarfile.open(fileobj=io.BytesIO(data), mode='r:') as archive:
         for member in archive.getmembers():
             name = member.name
             if name not in {'install.sh', 'app/res/mipmap-xxxhdpi/ic_launcher_foreground.png'} and not name.startswith(prefixes) and name not in docs:
                 continue
-            if name.endswith('.md') and name not in docs:
+            if name.endswith('.md') and name not in docs and not name.startswith('dsh-plugin/'):
                 continue
             if (Path(name).suffix in ['.lock', '.log', '.jsonl'] or Path(name).name.endswith('_state.json') or
                     any(p.endswith('.runs') for p in Path(name).parts)):

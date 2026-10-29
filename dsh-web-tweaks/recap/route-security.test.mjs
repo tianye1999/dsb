@@ -105,12 +105,13 @@ test('3080 route inventory contains only authenticated recap and report routes',
     return entry.isDirectory()?walk(full):[full];
   });
   const root=path.resolve(tweaks.pathname);
-  const sources=walk(root).filter(file=>/\.(js|mjs|py|sh)$/.test(file)&&!file.endsWith('.test.mjs'));
+  const repo=path.dirname(root);
+  const sources=[...walk(root),...walk(path.join(repo,'dsh-plugin'))].filter(file=>/\.(js|mjs|py|sh)$/.test(file)&&!file.endsWith('.test.mjs'));
   const routes=sources.filter(file=>/webServer\s*\.\s*(?:register|registerUpgrade|registerFallback)\s*\(|\bcreateServer\s*\(/.test(fs.readFileSync(file,'utf8')));
-  assert.deepEqual(routes.map(file=>path.relative(root,file)).sort(),
-    ['dsb-report/index.js','recap/hardened/index.js']);
+  assert.deepEqual(routes.map(file=>path.relative(repo,file)).sort(),
+    ['dsh-plugin/dsb-report/index.js','dsh-web-tweaks/recap/hardened/index.js']);
   const host=fs.readFileSync(path.join(root,'recap/hardened/index.js'),'utf8');
-  const report=fs.readFileSync(path.join(root,'dsb-report/index.js'),'utf8');
+  const report=fs.readFileSync(path.join(repo,'dsh-plugin/dsb-report/index.js'),'utf8');
   assert.match(report,/requestRejection/);
   assert.match(report,/kind: 'exact'/);
   assert.doesNotMatch(host,/createPrivateRecap|recap\.sock|\/inject|followup\(/);

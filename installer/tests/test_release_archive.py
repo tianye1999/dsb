@@ -38,7 +38,7 @@ class ReleaseArchiveTests(unittest.TestCase):
             'bridge/tracked.py': b'BRIDGE_FIXTURE = True\n',
             'termux/tracked.sh': b'#!/bin/sh\nexit 0\n',
             'dsh-config/tracked.yml': b'fixture: true\n',
-            'dsh-web-tweaks/dsb-brand/index.js': b'export const brand = true;\n',
+            'dsh-plugin/dsb-brand/index.js': b'export const brand = true;\n',
             'app/res/mipmap-xxxhdpi/ic_launcher_foreground.png': b'\x89PNG\r\n\x1a\n',
         }
         for index, (name, content) in enumerate(self.tracked.items()):

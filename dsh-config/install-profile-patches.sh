@@ -39,7 +39,7 @@ for profile in web phone headless; do
   [ -f "$target" ] || cp "$HERE/cordis.patch.$profile.yml" "$target"
   python3 "$HERE/privacy_defaults.py" "$target"
   verify_args=(--verify-dump)
-  if [ "$profile" = web ] && [ -L "$ROOT/web/node_modules/dsb-report" ]; then
+  if [ "$profile" = web ] && [ -L "$ROOT/web/node_modules/dsh-dsb" ]; then
     verify_args+=(--require-report)
   fi
   if ! dsh --profile "$profile" --dump-config 2>/dev/null |
@@ -48,10 +48,15 @@ for profile in web phone headless; do
     exit 1
   fi
   printf 'privacy default verified: %s enabled=false\n' "$profile"
-  if [ "$profile" = web ] && [ -L "$ROOT/web/node_modules/dsb-report" ]; then
-    node --input-type=module -e 'await import(process.argv[1])' \
-      "$ROOT/web/node_modules/dsb-report/index.js" || {
-        echo 'dsb-report import failed' >&2
+  if [ "$profile" = web ] && [ -L "$ROOT/web/node_modules/dsh-dsb" ]; then
+    node --input-type=module -e '
+      const base = process.argv[1];
+      for (const name of ["index.js", "dsb-brand/index.js", "dsb-report/index.js", "dsb-ui/index.js"])
+        await import(base + "/" + name);
+      const {apply} = await import(base + "/dsb-brand/index.js");
+      apply({on() {}});
+    ' "$ROOT/web/node_modules/dsh-dsb" || {
+        echo 'dsh-dsb component import/asset validation failed' >&2
         exit 1
       }
   fi

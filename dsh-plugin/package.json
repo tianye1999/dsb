@@ -1,0 +1,27 @@
+{
+  "name": "dsh-dsb",
+  "version": "1.0.0",
+  "description": "Unofficial DSB branding, execution reports and mobile UI for DeepSeek Harness. 逗沙包 DSH 插件。",
+  "license": "Apache-2.0",
+  "repository": {"type": "git", "url": "https://github.com/tianye1999/dsb.git", "directory": "dsh-plugin"},
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./dsb-brand": "./dsb-brand/index.js",
+    "./dsb-report": "./dsb-report/index.js",
+    "./dsb-ui": "./dsb-ui/index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["index.js", "cordis.patch.yml", "client.js", "dsb-brand/index.js", "dsb-report/index.js", "dsb-report/web-turns.mjs", "dsb-ui/", "runtime/", "LICENSE", "README.zh-CN.md", "MIGRATION.md"],
+  "scripts": {"build": "node build.mjs", "check": "node build.mjs --check"},
+  "peerDependencies": {"@deepseek-ai/dsh": "0.2.1-rc.2"},
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {"patch": "./cordis.patch.yml"},
+    "client": {
+      "inject": ["@deepseek-ai/dsh-client-ui-renderer", "@deepseek-ai/dsh-client-ui-sidebar", "@deepseek-ai/dsh-client-ui-chat"],
+      "platform": "web"
+    }
+  }
+}

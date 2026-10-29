@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="./favicon-dark.svg" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" media="(prefers-color-scheme: light)" />
+    <title>DeepSeek Harness</title>
+    <script type="module" crossorigin src="./assets/index-CN7NIWNw.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/vendor-DcuzkuQH.js">
+    <link rel="stylesheet" crossorigin href="./assets/vendor-DV2921Zo.css">
+    <link rel="stylesheet" crossorigin href="./assets/index-BxpfOGf3.css">
+  <style id="dsh-composer-style">
+      /* —— 底部输入框（默认展开，可点圆点切换） + 右下角小圆点唤出 —— */
+      html[data-dsh-composer="hidden"] .wSkVaW_composerSeat,
+      html[data-dsh-composer="hidden"] .wSkVaW_composerStack,
+      html[data-dsh-composer="hidden"] [data-composer-seat]{display:none !important}
+      #dsh-composer-dot{
+        position:fixed;right:10px;bottom:10px;z-index:2147483000;
+        width:26px;height:26px;padding:0;border-radius:50%;cursor:pointer;
+        border:1px solid color-mix(in srgb, currentColor 22%, transparent);
+        background:color-mix(in srgb, currentColor 8%, transparent);
+        color:inherit;font:12px/1 system-ui,sans-serif;
+        display:flex;align-items:center;justify-content:center;
+        opacity:.35;transition:opacity .15s ease, bottom .15s ease;
+      }
+      #dsh-composer-dot:hover{opacity:1}
+</style><style id="dsh-repair-style">
+      /* dsh-light-enforce（2026-09-22）：强制**浅色**（原为强制深色，用户反馈黑底白字刺眼）。
+         DSH 浅色就是 body 默认档，只要不被加上深色属性即可。 */
+      html{color-scheme:light !important}
+      body{color-scheme:light !important}
+      /* 消息气泡：用户附件里的蓝 #cce6ff + 深色字 */
+      .Sixlwa_bubble{background:#cce6ff !important;color:#0f1012 !important}
+
+      /* dsh-hide-thinking（2026-09-22 用户要求）：关闭「思考过程」的显示。
+         ⚠️ 只隐藏显示，不关模型推理能力（reasoningEffort 不动）——不损失回答质量。 */
+      .lcKema_root{display:none !important}
+
+      /* dsh-conclusion-card（2026-09-22）：把回答末尾的引用块渲染成深色「结论卡」。
+         与总结弹窗同一套配色：底 #22252b / 竖条 #4d8dff / 字白。
+         人设（cordis.patch.yml 的 personaPrefix）要求每轮以引用块收尾。 */
+      .EvIC1a_scroll [class*="_markdown_"] blockquote{
+        background:#22252b !important; color:#ffffff !important;
+        border:none !important; border-left:3px solid #4d8dff !important;
+        border-radius:10px !important; padding:12px 15px !important;
+        margin:14px 0 4px !important;
+        box-shadow:0 2px 10px rgba(0,0,0,.10) !important;
+        font-size:15px !important; line-height:23px !important;
+      }
+      .EvIC1a_scroll [class*="_markdown_"] blockquote,
+      .EvIC1a_scroll [class*="_markdown_"] blockquote p,
+      .EvIC1a_scroll [class*="_markdown_"] blockquote li{color:#c8cdd4 !important}
+      .EvIC1a_scroll [class*="_markdown_"] blockquote strong,
+      .EvIC1a_scroll [class*="_markdown_"] blockquote b{color:#ffffff !important;font-weight:600 !important}
+      .EvIC1a_scroll [class*="_markdown_"] blockquote a{color:#8ab4ff !important}
+      .EvIC1a_scroll [class*="_markdown_"] blockquote p{margin:0 !important}
+      .EvIC1a_scroll [class*="_markdown_"] blockquote p + p{margin-top:6px !important}
+      /* 卡内代码（2026-09-23 修正）：
+         ⚠️ 原来用 filter:invert 做"深底可读"，实测**适得其反**：
+            行内 code 的 computed 背景是浅色(250,250,250)、字色继承卡片(200,205,212)，
+            反相后变成"深底 + 深字" → 用户看不清（截图圈出来了）。
+         正解：**去掉反转**，改成"浅底 + 深字"——
+            行内 code 显式给浅色底 + 固定深色字（行内代码没有语法高亮，安全）；
+            代码块保留 DSH 原生浅底，用强制深色兜底（shiki 高亮多为中深色，在浅底上可读；
+            若个别高亮色偏浅，比"整块看不清"仍好得多）。 */
+      .EvIC1a_scroll [class*="_markdown_"] blockquote code{
+        background:rgba(255,255,255,.92) !important;
+        color:#0f1115 !important;
+      }
+      .EvIC1a_scroll [class*="_markdown_"] blockquote code *{color:#0f1115 !important}
+      .EvIC1a_scroll [class*="_markdown_"] blockquote pre{
+        background:#f9fafb !important;
+        border:1px solid rgba(255,255,255,.14) !important;
+      }
+      .EvIC1a_scroll [class*="_markdown_"] blockquote pre code,
+      .EvIC1a_scroll [class*="_markdown_"] blockquote pre code *{background:transparent !important}
+</style><style id="dsh-font-rules">
+      /* —— 全局字号/留白（2026-09-21 定；2026-09-22 收编进补丁）—— */
+      #root{zoom:1 !important}
+      html{-webkit-text-size-adjust:160% !important;text-size-adjust:160% !important}
+      .EvIC1a_scroll{padding-left:4px !important;padding-right:4px !important}
+      .uV2eYG_root{padding-left:4px !important;padding-right:4px !important}
+      .bOPqQW_root{padding-left:4px !important;padding-right:4px !important}
+      .bOPqQW_root, .bOPqQW_root *{font-size:5px !important;line-height:1.5 !important}
+      /* 2026-09-22：消息操作条缩到一半（原作者意图），但**必须同时隐藏它的
+         悬浮提示气泡** —— 否则那个 tooltip（"复制"）会飘在页面左边中间。
+         原因：tooltip 的 left/top 是按**未缩放**坐标写进 inline style 的，
+         而父容器被 zoom:0.5 缩放 → 位置算错；且触屏没有 hover 去隐藏它
+         → 永久可见。实测：气泡固定在 (0,333)、31x20、黑底白字。
+         触屏上 tooltip 本来就无用，直接 display:none。 */
+      .xzv4MW_actions{zoom:0.5}
+      ._bubble_1nw3t_1{display:none !important}
+      .lcKema_root, .lcKema_root *{font-size:6.5px !important}
+      /* dsh-hide-thinking（2026-09-22 用户要求）：关闭"思考过程"的显示。
+         ⚠️ 只隐藏显示，**不关模型的推理能力**（reasoningEffort 保持不动）——
+            推理继续做，只是不给用户看，这样不损失回答质量。
+         前端「思考」块的根类就是 .lcKema_root（其下有 lcKema_thinkBody），
+         整个块连外壳一起隐藏。想恢复：删掉这条或改成 display:block。 */
+      .lcKema_root{display:none !important}
+
+      /* dsh-shrink-content（2026-09-22）：工具卡片（代码/读取/写入/编辑/搜索）+
+         上下文注入 + bash + others（任务列表等），与「思考」同字号 6.5px（渲染 9.6px） */
+      .o3BgMG_root, .o3BgMG_root *,
+      .CY-8Ka_root[data-variant="bash"], .CY-8Ka_root[data-variant="bash"] *,
+      .XrJvXW_root, .XrJvXW_root *,
+      ._5OnbHa_root, ._5OnbHa_root *{font-size:6.5px !important;line-height:1 !important}
+
+      /* dsh-tight-blocks:begin（2026-09-22 v4）
+         ① 正文/气泡行距 1.4（保持正常）；
+         ② 内容块（卡片/任务列表/工具调用条目）压到最小：
+            - 卡片文字 + 「思考」都 line-height:1；
+            - 卡片行高写死 24px（._row_luwio_16，文字只有 ~10px）→ 用 App 自带变量
+              --dsh-content-font-delta:-9px：行高 24→15px、图标 16→7px、svg 14→5px，
+              行内留白 14→5px（≈1/3）；再往下文字/图标会被 overflow:hidden 裁掉；
+            - 变量只在卡片作用域里设，不碰正文（正文用 body 上的默认值，设 :root 会被 body 覆盖）；
+            - 子调用 margin 4/2→1/1、row-gap 4→1px；消息行 margin 16→1px；
+            - 块内段落/列表 margin 2px、pre 上下 padding 2px；
+         ③ 表格行距也压到最小：th/td line-height 1（15.6px）、上下 padding 10px→1px。 */
+      .EvIC1a_scroll *{line-height:1.4 !important}
+      .lcKema_root, .lcKema_root *,
+      .o3BgMG_root, .o3BgMG_root *,
+      .CY-8Ka_root[data-variant="bash"], .CY-8Ka_root[data-variant="bash"] *,
+      .XrJvXW_root, .XrJvXW_root *,
+      ._5OnbHa_root, ._5OnbHa_root *{line-height:1 !important}
+      .EvIC1a_scroll table, .EvIC1a_scroll table *{line-height:1 !important}
+      .EvIC1a_scroll th, .EvIC1a_scroll td{padding-top:1px !important;padding-bottom:1px !important}
+      .EvIC1a_scroll ._root_luwio_9,
+      .lcKema_root, .o3BgMG_root, .CY-8Ka_root, .XrJvXW_root, ._5OnbHa_root{
+        --dsh-content-font-size:6.5px !important;
+        --dsh-content-font-size-secondary:6.5px !important;
+        --dsh-content-font-delta:-9px !important;
+      }
+      .ztWv_q_subCalls{margin-top:1px !important;margin-bottom:1px !important;row-gap:1px !important}
+      .EvIC1a_flowItem{margin-top:1px !important}
+      .o3BgMG_root p, .o3BgMG_root ol, .o3BgMG_root ul, .o3BgMG_root li,
+      .CY-8Ka_root p, .CY-8Ka_root ol, .CY-8Ka_root ul, .CY-8Ka_root li,
+      .XrJvXW_root p, .XrJvXW_root ol, .XrJvXW_root ul, .XrJvXW_root li,
+      ._5OnbHa_root p, ._5OnbHa_root ol, ._5OnbHa_root ul, ._5OnbHa_root li{margin-top:2px !important;margin-bottom:2px !important}
+      .o3BgMG_root pre, .CY-8Ka_root pre, .XrJvXW_root pre, ._5OnbHa_root pre{padding-top:2px !important;padding-bottom:2px !important}
+      /* dsh-tight-blocks:end */
+
+      /* dsh-terminal-tight（2026-09-23）：新版「终端卡」（bash/命令输出）压小。
+         背景：用户截图反馈"返回代码信息这块字号太大、行距太大"。
+         实测（CDP 读 App WebView 真实 DOM 的 computed style）：
+           头部 CY-8Ka_root 仍被旧规则覆盖，但**内容体被拆成了独立节点**：
+             CY-8Ka_card > CY-8Ka_bodyWrap > _block_1gdtu_1.CY-8Ka_terminal
+               > _header_1gdtu_32（_prompt_1gdtu_70 / _promptLine_1gdtu_78 /
+                                    _cwd_1gdtu_108 / _command_1gdtu_116 /
+                                    _runStateLabel_1gdtu_99 / _copyButton_1gdtu_143）
+               > _output_1gdtu_156 > _line_1gdtu_180
+           这些节点**不在 .CY-8Ka_root 之下** → 旧规则够不着
+           → 继承正文 20px（渲染 24px / 行高 33.6px），一屏放不下几行。
+         取值：10px / 行高 12px（渲染 ≈12px / 14.4px，约正文的一半）。
+         特异性：html body 前缀 → (0,3,0)，稳赢正文那条 :where(...) 的 (0,1,0)。 */
+      html body .EvIC1a_scroll .CY-8Ka_card,
+      html body .EvIC1a_scroll .CY-8Ka_card *,
+      html body .EvIC1a_scroll .CY-8Ka_bodyWrap,
+      html body .EvIC1a_scroll .CY-8Ka_bodyWrap *,
+      html body .EvIC1a_scroll .CY-8Ka_terminal,
+      html body .EvIC1a_scroll .CY-8Ka_terminal *,
+      html body .EvIC1a_scroll [class*="_1gdtu_"],
+      html body .EvIC1a_scroll [class*="_1gdtu_"] *{
+        font-size:10px !important; line-height:12px !important;
+      }
+      /* 卡内留白一起收（头部那条最占地方） */
+      html body .EvIC1a_scroll ._header_1gdtu_32{padding:2px 6px !important;min-height:0 !important}
+      html body .EvIC1a_scroll ._output_1gdtu_156,
+      html body .EvIC1a_scroll ._line_1gdtu_180{padding-top:0 !important;padding-bottom:0 !important;margin:0 !important}
+      html body .EvIC1a_scroll .CY-8Ka_card{margin-top:2px !important;margin-bottom:2px !important;border-radius:6px !important}
+      /* 工具调用折叠组头（"32 次工具调用 · 5 条消息"）同属代码信息块：一起压小 */
+      html body .EvIC1a_scroll [class*="l_V-RG_"]{font-size:10px !important;line-height:12px !important}
+</style><style id="dsh-content-rules">
+      /* dsh-body-font-bump（2026-09-22；2026-09-24 用户要求"再小一点点" → 20px 改 18px）：正文 18px（渲染 21.6px）。
+         正文原本靠"继承浏览器默认字号 + text-size-adjust:160%"自动放大，
+         CSS 里没有可调基准 → 只能显式给字号。
+         ⚠️ 用 :where() 包裹那串 :not()：否则特异性飙到 (0,13,0)，
+            会压死后面的代码块/表格规则（2026-09-22 踩过）。
+         ⚠️ 排除项里要含 .md-code-block 和表格，否则它们会被正文规则覆盖。 */
+      .EvIC1a_scroll,
+      .EvIC1a_scroll :where(:not(.lcKema_root):not(.lcKema_root *):not(.o3BgMG_root):not(.o3BgMG_root *):not(.CY-8Ka_root):not(.CY-8Ka_root *):not(.XrJvXW_root):not(.XrJvXW_root *):not(._5OnbHa_root):not(._5OnbHa_root *):not(._root_luwio_9):not(._root_luwio_9 *):not(.md-code-block):not(.md-code-block *):not(table):not(table *)){
+        font-size:18px !important;
+      }
+
+      /* dsh-codeblock-tight（2026-09-22）：代码块与行内代码压到最小。
+         shiki 把代码切成 span.line，只压外层压不住内层 → 一并覆盖。 */
+      .EvIC1a_scroll .md-code-block pre,
+      .EvIC1a_scroll .md-code-block pre code,
+      .EvIC1a_scroll .md-code-block code,
+      .EvIC1a_scroll .md-code-block pre code .line,
+      .EvIC1a_scroll .md-code-block pre code span,
+      .EvIC1a_scroll pre._plain_rsn9u_103,
+      .EvIC1a_scroll pre._plain_rsn9u_103 code,
+      .EvIC1a_scroll pre._plain_rsn9u_103 code .line,
+      .EvIC1a_scroll ._content_rsn9u_74 pre,
+      .EvIC1a_scroll ._content_rsn9u_74 code{
+        font-size:11px !important; line-height:13px !important;
+      }
+      .EvIC1a_scroll [class*="_markdown_"] :not(pre) > code,
+      .EvIC1a_scroll [class*="_markdown_"] :not(pre) > code *{
+        font-size:11px !important; line-height:16px !important; padding:0 3px !important;
+      }
+      .EvIC1a_scroll .md-code-block pre{padding:2px 5px !important}
+      .EvIC1a_scroll .md-code-block ._content_rsn9u_74{padding:0 !important}
+      .EvIC1a_scroll .md-code-block ._bannerWrap_rsn9u_24{padding:0 !important;min-height:0 !important}
+      .EvIC1a_scroll .md-code-block{margin-top:3px !important;margin-bottom:3px !important;border-radius:6px !important}
+
+      /* dsh-tooltip-off（2026-09-22）：隐藏 tooltip 气泡。
+         现象：页面左边中间永久飘着一块黑底白字「复制」小卡片。
+         根因：① patch_fonts 给 .xzv4MW_actions 加了 zoom:0.5；
+               ② tooltip 的 left/top 按**未缩放**坐标写进 inline style，
+                  父容器缩放后位置算错，飘到页面左边；
+               ③ 触屏无 hover → tooltip 永不被隐藏，永久可见。
+         触屏上 tooltip 本就无用，直接隐藏。 */
+      ._bubble_1nw3t_1{display:none !important}
+
+      /* dsh-table-tight（2026-09-22）：表格 15px（渲染 18px）/ 行高 20px，
+         右 padding 16 → 8px（列更靠拢、少换行）。 */
+      .EvIC1a_scroll [class*="_markdown_"] table,
+      .EvIC1a_scroll [class*="_markdown_"] table th,
+      .EvIC1a_scroll [class*="_markdown_"] table td,
+      .EvIC1a_scroll [class*="_tableScroll_"] table,
+      .EvIC1a_scroll [class*="_tableScroll_"] th,
+      .EvIC1a_scroll [class*="_tableScroll_"] td{
+        font-size:15px !important; line-height:20px !important;
+      }
+      .EvIC1a_scroll [class*="_markdown_"] th,
+      .EvIC1a_scroll [class*="_markdown_"] td,
+      .EvIC1a_scroll [class*="_tableScroll_"] th,
+      .EvIC1a_scroll [class*="_tableScroll_"] td{
+        padding-top:0 !important; padding-bottom:0 !important; padding-right:8px !important;
+      }
+      .EvIC1a_scroll [class*="_tableScroll_"] table code{font-size:13px !important;line-height:16px !important}
+</style>
+    <!-- dsh-chat-bg（2026-09-24 用户要求：对话页底色用暖白 #F7F6F3） -->
+    <style id="dsh-chat-bg">
+      /* DSB 的 frame/root/panel 都吃 --dsw-alias-bg-base；改 token 比改哈希类名稳。
+         深色档给参考配色深色的同款值（0 0% 8% = #141414），避免深色下被强制成暖白。 */
+      body { --dsw-alias-bg-base: #F7F6F3 !important; }
+      body[data-ds-dark-theme] { --dsw-alias-bg-base: #141414 !important; }
+    </style>
+<style id="dsh-privacy-ui-style">
+/* Reserve the fixed rail control's own lane; never overlay the brand. */
+.hHd-Xa_logoRow { padding-left:32px !important; }
+.hHd-Xa_brandName { letter-spacing:0 !important; }
+.hHd-Xa_brandName::after { content:none !important; }
+@media (max-width:600px) {
+  [role="menu"] ._shortcut_4ub78_198 { display:none !important; }
+  /* Statistics are optional detail, not clipped fragments on a phone. */
+  [data-composer-stat] { display:none !important; }
+  .uV2eYG_row { flex-wrap:wrap !important; gap:8px !important; }
+  .uV2eYG_trailing { flex:1 1 100% !important; min-width:0 !important; }
+  .uV2eYG_standardControls { flex:1 !important; min-width:0 !important; }
+  ._7KE1Ra_root { flex:1 !important; min-width:0 !important; }
+  ._7KE1Ra_trigger {
+    max-width:100% !important; height:auto !important; min-height:28px;
+    flex-wrap:wrap !important; row-gap:2px;
+  }
+  ._7KE1Ra_triggerLabel {
+    display:block !important;
+    white-space:normal !important; overflow:visible !important;
+    overflow-wrap:anywhere; text-overflow:clip !important;
+  }
+  ._7KE1Ra_triggerEffort {
+    display:block !important; flex:0 0 auto !important;
+    white-space:nowrap !important; overflow:visible !important;
+    overflow-wrap:normal; text-overflow:clip !important;
+  }
+  ._7KE1Ra_triggerIcon { display:none !important; }
+  ._7KE1Ra_triggerLabel ._1C9Wka_label { white-space:normal !important; flex-wrap:wrap; }
+}
+</style>
+</head>
+  <body>
+    <div id="root"></div>
+
+    <!-- DSH 侧栏两态折叠 + 浮层（本地改动，2026-09-23 重做）：
+         点一下 = 全开（浮在内容之上、内容零位移），再点一下 = 收起。
+         做法：直接调 App 自己的 .hHd-Xa_toggle（App 才负责渲染完整侧栏）；列宽照给，
+         不挤走内容靠给 centerCol 反向位移。 -->
+    <style id="dsh-rail-style">
+      #dsh-rail-toggle{
+        position:fixed;left:6px;top:6px;z-index:120;
+        width:26px;height:26px;padding:0;border-radius:8px;cursor:pointer;
+        border:1px solid color-mix(in srgb, currentColor 22%, transparent);
+        background:color-mix(in srgb, currentColor 8%, transparent);
+        color:inherit;font:13px/1 system-ui,sans-serif;
+        display:flex;align-items:center;justify-content:center;
+        opacity:.4;transition:opacity .15s ease;
+      }
+      #dsh-rail-toggle:hover{opacity:1}
+      html[data-dsh-sidebar="hidden"] .pI_x6G_sidebarCol{visibility:hidden}
+      /* —— 追加：字号整体稍大一档 + 用户消息铺满宽度 —— */
+      #root{zoom:1.07}
+      .Sixlwa_userStack{max-width:100% !important}
+      .Sixlwa_userRow{align-items:stretch !important}
+      .Sixlwa_bubble{max-width:100% !important}
+      /* 输入框出现时轻微上滑淡入（display 切换会重启动画） */
+      .wSkVaW_composerSeat{animation:dsh-composer-in .18s ease}
+      @keyframes dsh-composer-in{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+
+
+      html[data-dsh-sidebar="full"] .pI_x6G_sidebarCol{
+        z-index:100;visibility:visible !important;
+        background:var(--dsw-alias-bg-base,#fff);
+        box-shadow:6px 0 24px rgba(0,0,0,.28);
+        animation:dsh-sidebar-in .16s ease-out;
+      }
+      @keyframes dsh-sidebar-in{from{transform:translateX(-10px);opacity:.6}to{transform:none;opacity:1}}
+      /* 内容列反向左移同样宽度 + 铺满视口 → 视觉位置完全不变（内容不会被挤走） */
+      html[data-dsh-sidebar="full"] .pI_x6G_centerCol{
+        width:100vw !important;
+        margin-left:calc(-1 * var(--dsh-sidebar-w,280px)) !important;
+      }
+      /* Brand content is supplied by the dsb-brand sidebar slots. */
+      button.hHd-Xa_brand, .hHd-Xa_brand *{pointer-events:none !important}
+      button.hHd-Xa_brand{cursor:default !important}
+    </style>
+    <script id="dsh-rail-script">
+    (function () {
+      var FALLBACK_FULL = 280;
+      var lastFull = FALLBACK_FULL + 'px';   // 注意带单位：无单位 width 无效（踩过）
+      function frame() { return document.querySelector('div[style*="grid-template-columns"]'); }
+      function appRoot() { return document.querySelector('.hHd-Xa_root'); }
+      function appExpanded() { var r = appRoot(); return !!r && !r.classList.contains('hHd-Xa_collapsed'); }
+      function apply() {
+        var f = frame(); if (!f) return;
+        var parts = (f.style.gridTemplateColumns || '').split(/\s+/);
+        if (parts.length < 3) return;
+        var cur = parseFloat(parts[0]) || 0;
+        if (cur >= 120) lastFull = cur + 'px';
+        // 展开/隐藏以 App 自己的 collapsed 类为准（它决定渲染窄条还是完整侧栏）
+        var mode = appExpanded() ? 'full' : 'hidden';
+        var want = mode === 'hidden' ? '0px' : lastFull;
+        if (parts[0] !== want) { parts[0] = want; f.style.gridTemplateColumns = parts.join(' '); }
+        document.documentElement.style.setProperty('--dsh-sidebar-w', lastFull);
+        document.documentElement.setAttribute('data-dsh-sidebar', mode);
+        var b = document.getElementById('dsh-rail-toggle');
+        if (b) {
+          b.textContent = mode === 'hidden' ? '\u203a' : '\u2039';
+          b.title = '\u4fa7\u680f\uff1a' + (mode === 'hidden' ? '\u5df2\u9690\u85cf' : '\u5df2\u5c55\u5f00') + '\uff08\u70b9\u51fb\u5207\u6362\uff09';
+        }
+      }
+      function cycle() {
+        // 点 App 自己的开关，但要**按方向选对按钮**：同类名下同时有「打开侧边栏」「收起侧边栏」
+        // 「收起右侧边栏」等，取第一个会点错（实测：收起时点了"打开"）。排除含「右」的。
+        var want = appExpanded() ? '收起' : '打开';
+        var bs = document.querySelectorAll('.hHd-Xa_toggle, [aria-label*="侧边栏"]'), hit = false;
+        for (var i = 0; i < bs.length; i++) {
+          var l = bs[i].getAttribute('aria-label') || '';
+          if (l.indexOf('侧边栏') >= 0 && l.indexOf('右') < 0 && l.indexOf(want) >= 0) { bs[i].click(); hit = true; break; }
+        }
+        if (!hit) { var t = document.querySelector('.hHd-Xa_toggle'); if (t) t.click(); }
+        setTimeout(apply, 100); setTimeout(apply, 350); setTimeout(apply, 800);
+      }
+      function boot() {
+        if (document.getElementById('dsh-rail-toggle')) { apply(); return; }
+        var b = document.createElement('button');
+        b.id = 'dsh-rail-toggle'; b.type = 'button'; b.title = '\u4fa7\u680f';
+        b.addEventListener('click', cycle);
+        document.body.appendChild(b);
+        apply();
+        new MutationObserver(apply).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+        setInterval(apply, 1000);
+      }
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+    })();
+    </script>
+  <script id="dsh-composer-script">
+    (function () {
+      // 2026-09-22 用户要求：输入框**默认展开**（原来默认 hidden）。
+      // 原因：打开页面时输入框是收起的，用户看不到它，以为坏了。
+      // 仍保留「发送后自动收起」+「点右下角圆点切换」。
+      var mode = 'shown';
+      try { mode = localStorage.getItem('dsh.composer.mode') || 'shown'; } catch (e) {}
+      function seat() { return document.querySelector('.wSkVaW_composerSeat'); }
+      function apply() {
+        document.documentElement.setAttribute('data-dsh-composer', mode);
+        var d = document.getElementById('dsh-composer-dot');
+        if (!d) return;
+        var h = 0, s = seat();
+        if (mode === 'shown' && s) { try { h = s.getBoundingClientRect().height || 0; } catch (e) {} }
+        d.style.bottom = (h ? h + 10 : 10) + 'px';
+        d.textContent = mode === 'hidden' ? '⌃' : '⌄';
+        d.title = mode === 'hidden' ? '显示输入框' : '隐藏输入框';
+      }
+      function toggle() {
+        mode = (mode === 'hidden') ? 'shown' : 'hidden';
+        try { localStorage.setItem('dsh.composer.mode', mode); } catch (e) {}
+        apply();
+        if (mode === 'shown') {
+          setTimeout(function () {
+            var s = seat(); if (!s) return;
+            var i = s.querySelector('textarea,[contenteditable="true"]');
+            if (i) { try { i.focus(); } catch (e) {} }
+          }, 80);
+        }
+      }
+      function boot() {
+        if (document.getElementById('dsh-composer-dot')) { apply(); return; }
+        var b = document.createElement('button');
+        b.id = 'dsh-composer-dot'; b.type = 'button';
+        b.addEventListener('click', toggle);
+        document.body.appendChild(b);
+        apply();
+        new MutationObserver(apply).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+        setInterval(apply, 1000);
+      }
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+
+      // —— 让 DSH 原生的「回到底部」按钮顺手展开输入框，并真正滚到底 ——
+      // 类名(EvIC1a_toBottom)是运行时生成的、HTML 里没有，所以按 aria-label 匹配；
+      // 用事件委托挂在 document 上，按钮反复出现/消失都不用重绑。
+      // 注意：这段必须在 <script> 标签【内部】——插到标签外浏览器不会执行（踩过这个坑）。
+      function scrollConvToBottom() {
+        var sc = document.querySelector('.wSkVaW_scrollBody');
+        if (sc) { try { sc.scrollTop = sc.scrollHeight; } catch (e) {} }
+      }
+      document.addEventListener('click', function (ev) {
+        var t = ev.target;
+        while (t && t !== document) {
+          var al = t.getAttribute && t.getAttribute('aria-label');
+          if (al === '回到底部') {          // 回到底部
+            if (mode !== 'shown') toggle();                  // 只在隐藏时展开
+            // 输入框展开会占掉 212px，按钮自己滚到的「底部」就不够了 → 延迟补滚两次
+            setTimeout(scrollConvToBottom, 120);
+            setTimeout(scrollConvToBottom, 400);
+            return;
+          }
+          t = t.parentElement;
+        }
+      }, true);   // 捕获阶段：按钮自己的滚动逻辑照常执行
+    })();
+    </script>
+    <script id="dsh-composer-autohide">
+    (function () {
+      // 发送后自动收起输入框：靠"输入内容被清空"来判定（发送成功的可靠信号）
+      var last = null;
+      function mode() { return document.documentElement.getAttribute('data-dsh-composer'); }
+      function seat() { return document.querySelector('.wSkVaW_composerSeat'); }
+      function input() {
+        var s = seat(); if (!s) return null;
+        return s.querySelector('textarea,[contenteditable="true"]');
+      }
+      function value(i) {
+        if (!i) return null;
+        return (i.value !== undefined ? i.value : (i.textContent || ''));
+      }
+      function hide() {
+        if (mode() !== 'shown') return;
+        var dot = document.getElementById('dsh-composer-dot');
+        if (dot) dot.click();          // 复用右下角小圆点的切换
+      }
+      setInterval(function () {
+        if (mode() !== 'shown') { last = null; return; }
+        var i = input();
+        if (!i) return;
+        var v = value(i);
+        if (last !== null && last.trim() !== '' && (v || '').trim() === '') {
+          setTimeout(hide, 350);      // 刚被清空 → 判定为已发送，稍等一拍再收起
+        }
+        last = v;
+      }, 250);
+    })();
+    </script>
+<script id="dsh-hide-tabs">
+    (function () {
+      // 1) 找到「对话 / 轨迹」那一行；2) 藏掉它；3) 把它上层残留的空白（高度/内边距）也收掉
+      var hidden = [];
+      function collapseChain(el) {
+        el.style.setProperty('display', 'none', 'important');
+        var cur = el, p = el.parentElement, depth = 0;
+        while (p && p !== document.body && depth < 3) {
+          p.style.setProperty('padding-top', '0px', 'important');
+          p.style.setProperty('padding-bottom', '0px', 'important');
+          p.style.setProperty('min-height', '0px', 'important');
+          p.style.setProperty('margin-top', '0px', 'important');
+          p.style.setProperty('margin-bottom', '0px', 'important');
+          var others = Array.prototype.filter.call(p.children, function (c) {
+            return c !== cur && c.offsetHeight > 1 && (c.textContent || '').trim() !== '';
+          });
+          if (others.length === 0) {
+            p.style.setProperty('height', '0px', 'important');
+            p.style.setProperty('display', 'none', 'important');
+            cur = p; p = p.parentElement; depth++;
+          } else break;
+        }
+      }
+      function hide() {
+        var best = null, bestH = 1e9;
+        var all = document.querySelectorAll('div,nav,header,ul,section');
+        for (var i = 0; i < all.length; i++) {
+          var el = all[i];
+          if (el === document.body || el === document.documentElement) continue;
+          if (el.children.length > 10) continue;
+          var txt = el.textContent || '';
+          if (txt.indexOf('对话') < 0 || txt.indexOf('轨迹') < 0) continue;
+          var h = el.clientHeight || 0;
+          if (h <= 0 || h > 160) continue;          // 只看高度很小的那条 tab 行
+          if (h < bestH) { best = el; bestH = h; }
+        }
+        if (best) collapseChain(best);
+      }
+      hide();
+      new MutationObserver(hide).observe(document.body, { childList: true, subtree: true });
+      setInterval(hide, 1000);
+    })();
+    </script>
+
+    <script id="dsh-light-enforce">
+    (function () {
+      var DARK = 'data-ds-dark-theme';
+      function ensure() {
+        try {
+          if (!document.body) return;
+          if (document.body.hasAttribute(DARK)) document.body.removeAttribute(DARK);
+          if (document.documentElement.hasAttribute(DARK)) document.documentElement.removeAttribute(DARK);
+        } catch (e) {}
+      }
+      // 2026-09-22：清掉 localStorage 里存的 composer 可见性。
+      // 用户要求输入框默认展开，但老的 'hidden' 会一直锁住它（补丁默认值改了也没用）。
+      try {
+        var m = localStorage.getItem('dsh.composer.mode');
+        if (m !== 'shown') localStorage.setItem('dsh.composer.mode', 'shown');
+      } catch (e) {}
+      ensure();
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ensure);
+      try {
+        new MutationObserver(ensure).observe(document.body || document.documentElement,
+          { attributes: true, attributeFilter: [DARK] });
+      } catch (e) {}
+      setInterval(ensure, 1000);
+    })();
+    </script>
+
+    <script id="dsh-composer-gesture">
+    (function () {
+      // 阈值：上滑离开底部多少像素就收起输入框
+      var COLLAPSE_AFTER = 60;
+      // 到底后继续上滑多少像素才唤起（原行为阈值）
+      var SHOW_AFTER = 26;
+
+      var lastY = 0, startedAtBottom = false, armed = true;
+      var startTop = 0, scrollingUpMode = false, upAccum = 0;
+
+      function scroller() {
+        return document.querySelector('[data-conversation-scroll]')
+            || document.querySelector('[class*="_scroll"]')
+            || document.scrollingElement;
+      }
+      function atBottom(el) {
+        try {
+          if (el === document.scrollingElement) {
+            return window.innerHeight + window.scrollY >= document.body.scrollHeight - 4;
+          }
+          return el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+        } catch (e) { return false; }
+      }
+      function awayFromBottom(el) {
+        try {
+          if (el === document.scrollingElement) {
+            return document.body.scrollHeight - (window.innerHeight + window.scrollY) > COLLAPSE_AFTER;
+          }
+          return el.scrollHeight - (el.scrollTop + el.clientHeight) > COLLAPSE_AFTER;
+        } catch (e) { return false; }
+      }
+      function mode() {
+        var m = document.documentElement.getAttribute('data-dsh-composer');
+        if (m) return m;
+        try { return localStorage.getItem('dsh.composer.mode') || 'hidden'; } catch (e) { return 'hidden'; }
+      }
+      function shown() { return mode() === 'shown'; }
+      function hidden() { return !shown(); }
+      function show() {
+        if (!hidden()) return;
+        var dot = document.getElementById('dsh-composer-dot');
+        if (dot) dot.click();              // 复用右下角小圆点的切换逻辑
+      }
+      function hide() {
+        if (!shown()) return;
+        var dot = document.getElementById('dsh-composer-dot');
+        if (dot) dot.click();
+      }
+
+      // —— 手指 ——
+      document.addEventListener('touchstart', function (e) {
+        var el = scroller(); if (!el) return;
+        lastY = startTop = e.touches[0].clientY;
+        startedAtBottom = atBottom(el);
+        armed = true; scrollingUpMode = false; upAccum = 0;
+        startTop = el.scrollTop;
+      }, { passive: true });
+
+      document.addEventListener('touchmove', function (e) {
+        var el = scroller(); if (!el) return;
+        var y = e.touches[0].clientY;
+        var dy = y - lastY;                 // >0 = 手指往上移 = 内容往下翻（看更早）
+        lastY = y;
+
+        // ① 往上翻看历史 → 收起输入框
+        if (dy > 0) {
+          if (!scrollingUpMode) { scrollingUpMode = true; upAccum = 0; }
+          upAccum += dy;
+          if (upAccum > SHOW_AFTER && awayFromBottom(el) && shown()) hide();
+        } else if (dy < 0) {
+          scrollingUpMode = false; upAccum = 0;
+        }
+
+        // ② 到底后继续上滑 → 唤起（原行为）
+        if (armed && hidden() && startedAtBottom && dy < -SHOW_AFTER && atBottom(el)) {
+          armed = false; show();
+        }
+      }, { passive: true });
+
+      // —— 桌面滚轮 ——
+      document.addEventListener('wheel', function (e) {
+        var el = scroller();
+        if (!el) return;
+        if (e.deltaY < 0) {                 // 往上滚 = 看更早
+          if (awayFromBottom(el) && shown()) hide();
+        } else if (hidden() && atBottom(el)) {
+          show();
+        }
+      }, { passive: true });
+    })();
+    </script>
+<script id="dsh-privacy-ui-script">
+(function () {
+  var issues = 'https://github.com/tianye1999/dsb/issues';
+  // This account menu has no public action slot. Capture before React's contact
+  // action so no account/device query parameters or upstream form are sent.
+  function openFeedback(event) {
+    if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+    var item = event.target instanceof Element ? event.target.closest('[role="menuitem"]') : null;
+    if (!item || !/^(意见反馈|Feedback)$/.test(item.textContent.trim())) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    window.location.assign(issues);
+  }
+  document.addEventListener('click', openFeedback, true);
+  document.addEventListener('keydown', openFeedback, true);
+  function labelProduct() {
+    if (document.title === 'DeepSeek Harness') document.title = '逗沙包 · 基于 DeepSeek Harness';
+    document.querySelectorAll('[role="dialog"][aria-label="预览版说明"] p').forEach(function (el, index) {
+      var text = index === 0 ? '逗沙包 · 基于 DeepSeek Harness。底座当前为 0.2 预览版，产品功能和插件 API 仍可能变化。' : '逗沙包是独立项目，不代表 DeepSeek 官方，也不暗示官方背书。';
+      if (el.textContent !== text) el.textContent = text;
+    });
+    // Exact product headings only. Never rewrite conversation text/model/account labels.
+    document.querySelectorAll('[role="dialog"] h1, [role="dialog"] h2, .hHd-Xa_localBuildTitle').forEach(function (el) {
+      if (el.textContent.trim() === 'DeepSeek Harness') el.textContent = '逗沙包 · 基于 DeepSeek Harness';
+    });
+  }
+  var labelScheduled = false;
+  function scheduleProductLabel() {
+    if (labelScheduled) return;
+    labelScheduled = true;
+    requestAnimationFrame(function () {
+      labelScheduled = false;
+      labelProduct();
+    });
+  }
+  new MutationObserver(scheduleProductLabel).observe(document.documentElement, {childList:true, subtree:true});
+  labelProduct();
+})();
+</script>
+</body>
+</html>

@@ -6,6 +6,8 @@
 
 # 逗沙包（DSB）
 
+DSH 侧的品牌、执行报告与界面调整已合为可安装的 [dsh-dsb 插件包](dsh-plugin/README.zh-CN.md)。
+
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-2879D0.svg)](LICENSE) [![Android 11+](https://img.shields.io/badge/Android-11%2B-27875B.svg)](docs/INSTALL.zh-CN.md) [![No root](https://img.shields.io/badge/Root-Not_required-27875B.svg)](docs/INSTALL.zh-CN.md) [![CI](https://github.com/tianye1999/dsb/actions/workflows/test.yml/badge.svg)](https://github.com/tianye1999/dsb/actions/workflows/test.yml) [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15815/badge)](https://www.bestpractices.dev/projects/15815)
 
 **杂务归 AI，决策归人，注意力归生活。**

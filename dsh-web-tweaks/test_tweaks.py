@@ -2,12 +2,15 @@
 from pathlib import Path
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import unittest
 
-from patch_privacy_ui import patch
+import importlib.util
+
+SPEC = importlib.util.spec_from_file_location("restore_index", Path(__file__).with_name("restore-index.py"))
+restore_index = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(restore_index)
 
 HERE = Path(__file__).resolve().parent
 
@@ -66,61 +69,35 @@ class TweaksTest(unittest.TestCase):
         self.assertEqual(result.returncode, 78, result.stderr)
         self.assertEqual(calls, [])
 
-    def test_effort_tag_cannot_wrap_inside_a_word_on_a_phone(self):
-        source = patch('<html><head></head><body></body></html>')
-        effort = re.search(r'\._7KE1Ra_triggerEffort\s*\{([^}]+)\}', source).group(1)
-        self.assertIn('white-space:nowrap', effort)
-        self.assertIn('flex:0 0 auto', effort)
-        self.assertIn('overflow-wrap:normal', effort)
-
-    def test_privacy_patch_is_repeatable_and_scripts_parse_individually(self):
-        source = patch('<html><head></head><body></body></html>')
-        self.assertEqual(patch(source), source)
-        for body in re.findall(r'<script[^>]*>(.*?)</script>', source, re.S):
-            result = subprocess.run(['node', '--check'], input=body, text=True, capture_output=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(source.count('id="dsh-privacy-ui-script"'), 1)
-
-    def test_entire_chain_reapply_and_restore_without_historical_backup(self):
+    def test_restore_is_exact_idempotent_and_keeps_backup(self):
+        fixtures = HERE.parent / 'dsh-plugin/tests/fixtures'
+        clean = fixtures / 'pristine-0.2.1-rc.2.html'
+        legacy = (fixtures / 'legacy-0.2.1-rc.2.html').read_bytes()
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            tweaks = root / 'tweaks'
-            shutil.copytree(HERE, tweaks, ignore=shutil.ignore_patterns('backups', '__pycache__', 'build'))
-            dist = root / 'dist'
-            dist.mkdir()
-            target = dist / 'index.html'
-            target.write_text('<html><head></head><body><div id="root"></div></body></html>')
-            env = dict(os.environ, DSH_TWEAKS_DIST=str(dist))
-            def apply(*args):
-                result = subprocess.run(['bash', str(tweaks / 'apply-all.sh'), *args],
-                                        env=env, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            apply()
-            first = target.read_text()
-            apply()
-            self.assertEqual(target.read_text(), first)
-            apply('--verify')
-            ids = re.findall(r'<(?:script|style) id="([^"]+)"', first)
-            self.assertEqual(len(ids), len(set(ids)))
-            self.assertIn('dsh-privacy-ui-script', ids)
-            self.assertNotIn('content:"Bao"', first)
-            rail = re.search(r'<style id="dsh-rail-style">(.*?)</style>', first, re.S).group(1)
-            self.assertIn('z-index:100;', rail)
-            self.assertIn('z-index:120;', rail)
-            self.assertNotIn('2147483000', rail)
-            target.write_text('broken')
-            apply('--restore')
-            self.assertEqual(target.read_text(), first)
-            legacy = rail.replace('z-index:100;', 'z-index:2147483000;').replace('z-index:120;', 'z-index:2147483000;')
-            legacy += '\n.keep-external-css{color:green}\n'
-            target.write_text(first.replace(rail, legacy))
-            apply()
-            upgraded = target.read_text()
-            self.assertIn('.keep-external-css{color:green}', upgraded)
-            rail = re.search(r'<style id="dsh-rail-style">(.*?)</style>', upgraded, re.S).group(1)
-            self.assertNotIn('2147483000', rail)
-            apply()
-            self.assertEqual(target.read_text(), upgraded)
+            index = root / 'index.html'
+            index.write_bytes(legacy)
+            for asset in re.findall(rb'assets/[\w.-]+\.(?:js|css)', clean.read_bytes()):
+                target = root / asset.decode()
+                target.parent.mkdir(exist_ok=True)
+                target.touch()
+            self.assertTrue(restore_index.restore(index, clean))
+            self.assertEqual(index.read_bytes(), clean.read_bytes())
+            self.assertEqual((root / 'index.html.before-dsh-dsb').read_bytes(), legacy)
+            self.assertFalse(restore_index.restore(index, clean))
+
+    def test_restore_refuses_unrecognized_or_wrong_version_shell(self):
+        clean = HERE.parent / 'dsh-plugin/tests/fixtures/pristine-0.2.1-rc.2.html'
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / 'index.html'
+            target.write_text('unknown')
+            with self.assertRaisesRegex(ValueError, 'marker'):
+                restore_index.restore(target, clean)
+            target.write_text('<style id="dsh-rail-style"></style>')
+            with self.assertRaisesRegex(ValueError, 'asset references'):
+                restore_index.restore(target, clean)
+            with self.assertRaisesRegex(ValueError, 'pinned'):
+                restore_index.restore(target, target)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,14 @@
+- id: ui-brand-official
+  disabled: true
+- id: ui-message-feedback
+  disabled: true
+- insert:
+    - id: dsb-brand
+      name: dsh-dsb
+      config: {component: dsb-brand}
+    - id: dsb-report
+      name: dsh-dsb
+      config: {component: dsb-report}
+    - id: dsb-ui
+      name: dsh-dsb
+      config: {component: dsb-ui}
