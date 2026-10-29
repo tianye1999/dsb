@@ -195,7 +195,7 @@ class CommandTransport(unittest.TestCase):
             if match:
                 nonce = match[1]
                 image = "观测屏图:" in script or "观测图:" in script
-                if "DSB_CANCELLED" in script:
+                if "emit_frame CANCELLED" in script:
                     start = int(re.search(r'\[\[ "\$epoch" < ([0-9]+)', script)[1])
                     flag = re.fullmatch(r"ABORT ([0-9]+)\s*", self.abort)
                     if self.abort and (flag is None or int(flag[1]) >= start):
@@ -219,12 +219,12 @@ class CommandTransport(unittest.TestCase):
                 out = frame("JSON", json.dumps(data).encode())
                 if image:
                     out += frame("JPEG", self.jpeg)
-                if "DSB_FOREGROUND" in script:
-                    self.assertLess(script.index("cat " + st.LOOK_DIR + '/"$jpg"') if image else
-                                    script.index("DSB_JSON"), script.index("dumpsys activity"))
+                if "emit_frame FOREGROUND" in script:
+                    self.assertLess(script.index("emit_frame JPEG") if image else
+                                    script.index("emit_frame JSON"), script.index("dumpsys activity"))
                     self.events.append("foreground")
                     out += frame("FOREGROUND", (self.dump if self.frame_dump is None else self.frame_dump).encode())
-                if "DSB_ABORT" in script:
+                if "emit_frame ABORT" in script:
                     out += frame("ABORT", self.abort.encode())
                 if self.after_observe:
                     self.after_observe()
@@ -732,6 +732,8 @@ class ShellProtocol(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory(prefix="dsb-t18-", dir="/tmp")
         self.addCleanup(tmp.cleanup)
         self.root = tmp.name
+        self.remote_tmp = os.path.join(self.root, "remote-tmp")
+        os.mkdir(self.remote_tmp)
         self.am_log = os.path.join(self.root, "am.log")
         self.image = bytes(range(256)) * 5 + b"\x00\nDSB_JSON 3\nerror\xff"
         self.data = dict(nonce="100000", displayId=35, image="look-9.jpg", jpg="look-9.jpg",
@@ -745,11 +747,15 @@ class ShellProtocol(unittest.TestCase):
         self.adb_mode = "quoted"
         self.device_shell = "/bin/bash"
         self.shell_results = []
+        self.external_commands = False
+        self.foreground_file = os.path.join(self.root, "foreground.txt")
+        with open(self.foreground_file, "w") as f:
+            f.write("Display #35 (activities from top to bottom):\n")
         bindir = os.path.join(self.root, "bin")
         os.mkdir(bindir)
         fixtures = {
             "am": '#!/bin/sh\nprintf "am\\n" >> "$DSB_TEST_AM_LOG"\n',
-            "dumpsys": '#!/bin/sh\nprintf "Display #35 (activities from top to bottom):\\n"\n',
+            "dumpsys": '#!/bin/sh\ncat "$DSB_TEST_FG_FILE"\n',
         }
         for name, source in fixtures.items():
             path = os.path.join(bindir, name)
@@ -757,11 +763,12 @@ class ShellProtocol(unittest.TestCase):
                 f.write(source)
             os.chmod(path, 0o700)
         self.shell_env = dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"],
-                              DSB_TEST_AM_LOG=self.am_log)
+                              DSB_TEST_AM_LOG=self.am_log, DSB_TEST_FG_FILE=self.foreground_file)
         for target, name, value in ((st, "LOOK_DIR", self.root), (st.time, "time", lambda: 100),
                                     (st, "LOOK_JSON", os.path.join(self.root, "look.json")),
                                     (st._LookCancellation, "flag", os.path.join(self.root, "abort.flag")),
                                     (st, "_CLOCK_SH", st._CLOCK_SH.replace("/proc/uptime", uptime)),
+                                    (st, "_FILES_SH", st._FILES_SH.replace("/data/local/tmp", self.remote_tmp)),
                                     (st, "adb_command", lambda: ["synthetic-adb"]),
                                     (st.subprocess, "run", self.shell)):
             p = patch.object(target, name, value)
@@ -785,11 +792,195 @@ class ShellProtocol(unittest.TestCase):
             command = " ".join(shlex.quote(arg) for arg in args)
         else:
             command = " ".join(args)
+        if self.external_commands:
+            command = "enable -n printf echo; " + command
         # This is a host-process watchdog, not the emulated device clock budget.
         result = REAL_RUN([self.device_shell, "-c", command], env=self.shell_env,
                           capture_output=True, timeout=30)
         self.shell_results.append(result)
+        self.assertEqual(os.listdir(self.remote_tmp), [], "device-script temporary directory leaked")
         return result
+
+    def use_external_output_commands(self):
+        self.device_shell = "/bin/bash"
+        self.external_commands = True
+        for name, executable in (("printf", "/usr/bin/printf"), ("echo", "/bin/echo")):
+            path = os.path.join(self.root, "bin", name)
+            with open(path, "w") as f:
+                f.write('#!/bin/bash\nexport LC_ALL=C\nfor arg do\n'
+                        '  if [ "${#arg}" -gt 131072 ]; then\n'
+                        '    printf "Argument list too long\\n" >&2; exit 126\n'
+                        '  fi\ndone\n'
+                        'printf "external\\n" >> "$DSB_TEST_EXTERNAL_LOG"\n'
+                        'exec ' + executable + ' "$@"\n')
+            os.chmod(path, 0o700)
+        self.external_log = os.path.join(self.root, "external.log")
+        self.shell_env["DSB_TEST_EXTERNAL_LOG"] = self.external_log
+
+    def test_external_printf_and_echo_fixture_reject_oversized_arguments(self):
+        self.use_external_output_commands()
+        payload = os.path.join(self.root, "oversized.txt")
+        with open(payload, "w") as f:
+            f.write("x" * 131073)
+        for name in ("printf", "echo"):
+            with self.subTest(command=name):
+                command = 'v=$(cat ' + shlex.quote(payload) + '); ' + name + ' "%s" "$v"'
+                result = self.shell(["synthetic-adb", "exec-out", command])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b"argument list too long", result.stderr.lower())
+        result = self.shell(["synthetic-adb", "exec-out", "printf '%s' small; echo small"])
+        self.assertEqual((result.returncode, result.stdout), (0, b"smallsmall\n"))
+        with open(self.external_log) as f:
+            self.assertEqual(len(f.readlines()), 2)
+
+    def test_large_observation_and_foreground_use_files_in_both_adb_modes(self):
+        self.use_external_output_commands()
+        self.image = bytes(range(256)) * 3200
+        with open(os.path.join(self.root, "look-9.jpg"), "wb") as f:
+            f.write(self.image)
+        foreground = "Display #35 (activities from top to bottom):\n" + "f" * (500 * 1024)
+        with open(self.foreground_file, "w") as f:
+            f.write(foreground)
+        nodes = [dict(text="x" * (300 * 1024), rect=[0, 0, 100, 100])]
+        self.data.update(jpgBytes=len(self.image), nodesRaw=json.dumps(nodes))
+        for mode in ("quoted", "joined"):
+            self.adb_mode = mode
+            for did in (0, 35):
+                with self.subTest(mode=mode, display=did):
+                    self.data["displayId"] = did
+                    self.write_json("look-100000.json", self.data)
+                    fg = {}
+                    result = st.observe(display_id=did, foreground_out=fg)
+                    self.assertIsNotNone(result)
+                    self.assertEqual(result["nodes"], nodes)
+                    self.assertEqual(result["_jpg_bytes"], self.image)
+                    self.assertEqual(fg["dump"], foreground)
+                    self.assertNotIn(b"Argument list too long", self.shell_results[-1].stderr)
+
+    def test_large_shared_tree_and_receipt_use_files_in_both_adb_modes(self):
+        self.use_external_output_commands()
+        nodes = [dict(text="x" * (300 * 1024))]
+        self.write_json("look.json", dict(nonce="100000:f", nodesRaw=json.dumps(nodes)))
+        for mode in ("quoted", "joined"):
+            self.adb_mode = mode
+            with self.subTest(mode=mode, operation="shared tree"):
+                result = st.observe(with_image=False, force=True)
+                self.assertIsNotNone(result)
+                self.assertEqual(result["nodes"], nodes)
+            for status in ("completed", "cancelled", "rejected"):
+                self.write_json("gesture-100000.json", dict(nonce="100000", displayId=35,
+                                kind="tap", status=status, padding="r" * (300 * 1024)))
+                with self.subTest(mode=mode, status=status):
+                    if status == "completed":
+                        result = st._dispatch_display_gesture(35, "tap", [(360, 800)], types.SimpleNamespace())
+                        self.assertEqual(result["status"], status)
+                    else:
+                        with self.assertRaises(st.ActionDispatchError) as caught:
+                            st._dispatch_display_gesture(35, "tap", [(360, 800)], types.SimpleNamespace())
+                        self.assertEqual(caught.exception.status, status)
+
+    def test_generated_scripts_do_not_pass_payload_variables_as_arguments(self):
+        for script in (self.generated_script(cancel=st._LookCancellation(), foreground=True), self.generated_script(gesture=True),
+                       st._LookCancellation().before_capture_shell(), st._LookCancellation().after_capture_shell()):
+            self.assertNotRegex(script, r'"\$(?:j|fg|ab)"')
+            self.assertNotRegex(script, r'\b(?:j|fg|ab)=\$\(')
+
+    def test_large_abort_flags_stream_and_preserve_python_cancellation(self):
+        self.use_external_output_commands()
+        self.write_json("look-100000.json", self.data)
+        flags = ("ABORT " + "0" * (300 * 1024) + "99999 \t\n",
+                 "ABORT 1" + "0" * (300 * 1024) + "\n",
+                 "ABORT 99999\n" + "x" * (300 * 1024), "ABORT 99999\x00\n")
+        for mode in ("quoted", "joined"):
+            self.adb_mode = mode
+            for index, flag in enumerate(flags):
+                with self.subTest(mode=mode, flag=index):
+                    if os.path.exists(self.am_log):
+                        os.remove(self.am_log)
+                    with open(st._LookCancellation.flag, "w") as f:
+                        f.write(flag)
+                    expected = st._LookCancellation().feed(flag, 0)
+                    cancel = st._LookCancellation()
+                    result = st.observe(display_id=35, cancel_check=cancel)
+                    self.assertEqual(cancel.stopped, expected)
+                    self.assertEqual(result is None, expected)
+                    self.assertEqual(os.path.exists(self.am_log), not expected)
+
+    def test_large_post_capture_abort_frame_is_not_truncated(self):
+        self.use_external_output_commands()
+        self.write_json("look-100000.json", self.data)
+        next_flag = os.path.join(self.root, "next-abort")
+        flag = "ABORT " + "0" * (300 * 1024) + "100000\n"
+        with open(next_flag, "w") as f:
+            f.write(flag)
+        with open(os.path.join(self.root, "bin", "am"), "w") as f:
+            f.write('#!/bin/sh\ncp "$DSB_NEXT_ABORT" "$DSB_ABORT_FILE"\n')
+        self.shell_env.update(DSB_NEXT_ABORT=next_flag, DSB_ABORT_FILE=st._LookCancellation.flag)
+        for mode in ("quoted", "joined"):
+            with self.subTest(mode=mode):
+                self.adb_mode = mode
+                with open(st._LookCancellation.flag, "w") as f:
+                    f.write("ABORT 99999\n")
+                cancel = st._LookCancellation()
+                self.assertIsNotNone(st.observe(display_id=35, cancel_check=cancel))
+                self.assertTrue(cancel.stopped)
+                self.assertTrue(self.shell_results[-1].stdout.endswith(flag.encode()))
+
+    def test_shared_tree_snapshot_survives_source_replacement(self):
+        self.use_external_output_commands()
+        replacement = os.path.join(self.root, "replacement.json")
+        self.write_json("replacement.json", dict(nonce="another", nodes=[]))
+        copier = os.path.join(self.root, "bin", "cp")
+        with open(copier, "w") as f:
+            f.write('#!/bin/sh\n/bin/cp "$@" || exit $?\n'
+                    'if [ "$1" = "$DSB_SHARED_JSON" ]; then\n'
+                    '  /bin/cp "$DSB_REPLACEMENT" "$DSB_SHARED_JSON"\nfi\n')
+        os.chmod(copier, 0o700)
+        self.shell_env.update(DSB_SHARED_JSON=st.LOOK_JSON, DSB_REPLACEMENT=replacement)
+        nodes = [dict(text="n" * (300 * 1024))]
+        for mode in ("quoted", "joined"):
+            with self.subTest(mode=mode):
+                self.adb_mode = mode
+                self.write_json("look.json", dict(nonce="100000", nodesRaw=json.dumps(nodes)))
+                result = st.observe(with_image=False)
+                self.assertIsNotNone(result)
+                self.assertEqual(result["nodes"], nodes)
+                with open(st.LOOK_JSON) as f:
+                    self.assertEqual(json.load(f)["nonce"], "another")
+
+    def test_temporary_directory_mode_and_cleanup_on_failure_exit_and_signal(self):
+        command = st._FILES_SH + 'ls -ld "$tmp"; exit 7'
+        result = self.shell(["synthetic-adb", "exec-out", command])
+        self.assertEqual(result.returncode, 7)
+        self.assertTrue(result.stdout.startswith(b"drwx------"), result.stdout)
+        result = self.shell(["synthetic-adb", "exec-out", st._FILES_SH + 'kill -TERM $$'])
+        self.assertEqual(result.returncode, 143)
+        self.assertIsNone(st.observe(display_id=35, timeout=0))
+        self.write_json("look-100000.json", self.data)
+        with open(os.path.join(self.root, "bin", "dumpsys"), "w") as f:
+            f.write("#!/bin/sh\nexit 7\n")
+        self.assertIsNone(st.observe(display_id=35, foreground_out={}))
+        self.assertEqual(self.shell_results[-1].returncode, 7)
+
+    def test_temporary_directory_creation_failure_never_broadcasts(self):
+        path = os.path.join(self.root, "bin", "mktemp")
+        with open(path, "w") as f:
+            f.write("#!/bin/sh\nexit 1\n")
+        os.chmod(path, 0o700)
+        self.assertIsNone(st.observe(display_id=35))
+        self.assertFalse(os.path.exists(self.am_log))
+        with self.assertRaises(st.ActionDispatchError) as caught:
+            st._dispatch_display_gesture(35, "tap", [(360, 800)], types.SimpleNamespace())
+        self.assertEqual(caught.exception.status, "unknown")
+        self.assertFalse(os.path.exists(self.am_log))
+
+    def test_oversized_jpeg_name_is_rejected_before_becoming_an_argument(self):
+        self.use_external_output_commands()
+        self.data["jpg"] = "look-" + "9" * (300 * 1024) + ".jpg"
+        self.write_json("look-100000.json", self.data)
+        self.assertIsNone(st.observe(display_id=35))
+        self.assertEqual(self.shell_results[-1].returncode, 65)
+        self.assertNotIn(b"Argument list too long", self.shell_results[-1].stderr)
 
     def test_observe_and_gesture_through_both_adb_argument_modes(self):
         self.device_shell = "/bin/sh"
@@ -905,13 +1096,14 @@ class ShellProtocol(unittest.TestCase):
                 self.assertEqual(result is None, cancelled)
                 self.assertEqual(os.path.exists(self.am_log), not cancelled)
 
-    def generated_script(self, gesture=False, cancel=None):
+    def generated_script(self, gesture=False, cancel=None, foreground=False):
         with patch.object(st, "_sh", return_value=b"") as run:
             if gesture:
                 with self.assertRaises(st.ActionDispatchError):
                     st._dispatch_display_gesture(35, "tap", [(360, 800)], types.SimpleNamespace())
             else:
-                st.observe(display_id=35, timeout=.3, cancel_check=cancel)
+                st.observe(display_id=35, timeout=.3, cancel_check=cancel,
+                           foreground_out={} if foreground else None)
         self.assertEqual(len(run.call_args.args), 2)
         return run.call_args.args[1]
 
@@ -997,7 +1189,7 @@ class ShellProtocol(unittest.TestCase):
                 cancel = st._LookCancellation()
                 cancel.started_ms = started
                 expected = cancel.feed(flag, 0)
-                result = REAL_RUN([shell, "-c", cancel.before_capture_shell() + "printf CAPTURE"],
+                result = REAL_RUN([shell, "-c", st._FILES_SH + cancel.before_capture_shell() + "printf CAPTURE"],
                                   capture_output=True, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.startswith(b"DSB_CANCELLED "), expected, result.stderr)

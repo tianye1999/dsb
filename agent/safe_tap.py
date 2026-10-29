@@ -705,6 +705,14 @@ _ORANGE = _BROADCAST + "'橙' >/dev/null 2>&1; "
 _CLOCK_SH = ("now_ms() { read up rest < /proc/uptime || return; "
              "frac=${up#*.}000; frac=${frac%\"${frac#???}\"}; "
              "printf '%s\\n' \"$(( ${up%.*} * 1000 + 1$frac - 1000 ))\"; }; ")
+# Keep payloads out of argv: Android's external printf has a per-argument limit.
+_FILES_SH = ("umask 077; tmp=$(mktemp -d /data/local/tmp/dsb-t18-XXXXXXXXXX) || exit 73; "
+             '[ -n "$tmp" ] || exit 73; trap \'rm -rf "$tmp"\' 0; '
+             "trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; "
+             'chmod 700 "$tmp" || exit 73; '
+             'emit_frame() { frame_bytes=$(wc -c < "$2") || return; '
+             'frame_bytes=${frame_bytes#"${frame_bytes%%[![:space:]]*}"}; '
+             "printf 'DSB_%s %s\\n' \"$1\" \"$frame_bytes\" || return; cat \"$2\"; }; ")
 
 
 def _read_frame(raw, tag, pos=0):
@@ -762,29 +770,32 @@ def observe(with_image=True, timeout=OBS_TIMEOUT, force=False, display_id=0,
     t0 = time.time()
     if not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout < 0:
         raise ValueError("invalid observation timeout")
-    script = _CLOCK_SH
+    script = _FILES_SH + _CLOCK_SH
     if cancel_check is not None:
         script += cancel_check.before_capture_shell()
     script += (_BROADCAST + shlex.quote(cmd) + " >/dev/null || exit $?; "
                "t0=$(now_ms); "
                "while [ $(( $(now_ms) - t0 )) -lt " + _shell_int(int(timeout * 1000)) + " ]; do "
-               "j=$(cat " + path + " 2>/dev/null); "
-               "case \"$j\" in *" + nonce + "*) break;; esac; sleep 0.05; done; "
+               "if cp " + path + ' "$tmp/json" 2>/dev/null && grep -qF ' + nonce +
+               ' "$tmp/json"; then break; fi; sleep 0.05; done; '
                "[ $(( $(now_ms) - t0 )) -lt " + _shell_int(int(timeout * 1000)) + " ] || exit 124; "
-               "printf 'DSB_JSON %s\\n' \"$(printf '%s' \"$j\" | wc -c | tr -d ' ')\"; "
-               "printf '%s' \"$j\"; ")
+               'emit_frame JSON "$tmp/json" || exit 66; ')
     if with_image:
         # The App closes the JPEG before publishing JSON. Reused frames name an older JPEG.
-        script += ("jpg=$(printf '%s' \"$j\" | sed -n 's/.*\"jpg\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p'); "
-                   "printf '%s\\n' \"$jpg\" | grep -Eq '^look-[0-9]+\\.jpg$' || exit 65; "
-                   "n=$(wc -c < " + LOOK_DIR + "/\"$jpg\") || exit 66; "
-                   "printf 'DSB_JPEG %s\\n' \"$(printf '%s' \"$n\" | tr -d ' ')\"; "
-                   "cat " + LOOK_DIR + "/\"$jpg\" || exit 66; ")
+        # Only a single filesystem-sized basename can become a command argument.
+        script += ("sed -n 's/.*\"jpg\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' "
+                   '"$tmp/json" > "$tmp/jpg-name" || exit 65; '
+                   'name_bytes=$(wc -c < "$tmp/jpg-name") || exit 65; '
+                   '[ "$name_bytes" -le 256 ] || exit 65; '
+                   'IFS= read -r jpg < "$tmp/jpg-name"; '
+                   '[ "$name_bytes" -eq "${#jpg}" ] || '
+                   '[ "$name_bytes" -eq "$(( ${#jpg} + 1 ))" ] || exit 65; '
+                   "grep -Eq '^look-[0-9]+\\.jpg$' \"$tmp/jpg-name\" || exit 65; "
+                   'emit_frame JPEG ' + LOOK_DIR + '/"$jpg" || exit 66; ')
     if foreground_out is not None:
         # Must run after the frame has completed, never before the observation broadcast.
-        script += (_ORANGE + "fg=$(dumpsys activity activities) || exit $?; "
-                   "printf 'DSB_FOREGROUND %s\\n' \"$(printf '%s' \"$fg\" | wc -c | tr -d ' ')\"; "
-                   "printf '%s' \"$fg\"; ")
+        script += (_ORANGE + 'dumpsys activity activities > "$tmp/foreground" || exit $?; '
+                   'emit_frame FOREGROUND "$tmp/foreground" || exit 66; ')
     if cancel_check is not None:
         script += cancel_check.after_capture_shell()
     read_at = time.monotonic()
@@ -1079,27 +1090,30 @@ class _LookCancellation:
         return self.feed(current, read_at)
 
     def before_capture_shell(self):
-        # Preserve trailing whitespace for the same full-match rule as Python.
+        # Normalize/validate in files; only an epoch no longer than started enters
+        # a shell variable. Preserve the original bytes for Python's full match.
+        # NUL must not be mistaken for end-of-text by grep/sed implementations.
         started = _shell_int(self.started_ms)
-        return ("ab=$(cat " + self.flag + " 2>/dev/null; printf '_'); ab=${ab%_}; "
-                'trimmed=${ab%"${ab##*[![:space:]]}"}; epoch=${trimmed#ABORT }; stop=0; '
-                'if [ -n "$ab" ]; then '
-                'if [ "$epoch" = "$trimmed" ]; then stop=1; else '
-                'case "$epoch" in ""|*[!0-9]*) stop=1;; '
-                # Compare normalized decimal strings, not overflowing epoch arithmetic.
-                '*) while [ "${epoch#0}" != "$epoch" ]; do epoch=${epoch#0}; done; '
-                'epoch=${epoch:-0}; '
-                'if [ "${#epoch}" -gt ' + str(len(started)) + ' ] || '
-                '{ [ "${#epoch}" -eq ' + str(len(started)) + ' ] && '
-                '! [[ "$epoch" < ' + started + ' ]]; }; then stop=1; fi;; esac; fi; fi; '
-                'if [ "$stop" -eq 1 ]; then '
-                "printf 'DSB_CANCELLED %s\\n' \"$(printf '%s' \"$ab\" | wc -c | tr -d ' ')\"; "
-                "printf '%s' \"$ab\"; exit 0; fi; ")
+        return (self._snapshot_shell() + 'stop=0; if [ -s "$tmp/abort" ]; then '
+                "tr '\\000\\n' '! ' < \"$tmp/abort\" > \"$tmp/abort-line\" || exit 66; "
+                "printf '\\n' >> \"$tmp/abort-line\" || exit 66; "
+                "if grep -aEq '^ABORT [0-9]+[[:space:]]*$' \"$tmp/abort-line\"; then "
+                "sed 's/^ABORT 0*//;s/[[:space:]]*$//;s/^$/0/' "
+                '"$tmp/abort-line" > "$tmp/epoch" || exit 66; '
+                'epoch_len=$(wc -c < "$tmp/epoch") || exit 66; epoch_len=$((epoch_len - 1)); '
+                'if [ "$epoch_len" -gt ' + str(len(started)) + ' ]; then stop=1; '
+                'elif [ "$epoch_len" -eq ' + str(len(started)) + ' ]; then '
+                'IFS= read -r epoch < "$tmp/epoch" || exit 66; '
+                'if ! [[ "$epoch" < ' + started + ' ]]; then stop=1; fi; fi; '
+                'else stop=1; fi; fi; '
+                'if [ "$stop" -eq 1 ]; then emit_frame CANCELLED "$tmp/abort" || exit 66; exit 0; fi; ')
+
+    def _snapshot_shell(self):
+        return ('if [ -e ' + self.flag + ' ]; then cp ' + self.flag + ' "$tmp/abort" || exit 66; '
+                'else : > "$tmp/abort" || exit 66; fi; ')
 
     def after_capture_shell(self):
-        return ("ab=$(cat " + self.flag + " 2>/dev/null; printf '_'); ab=${ab%_}; "
-                "printf 'DSB_ABORT %s\\n' \"$(printf '%s' \"$ab\" | wc -c | tr -d ' ')\"; "
-                "printf '%s' \"$ab\"; ")
+        return self._snapshot_shell() + 'emit_frame ABORT "$tmp/abort" || exit 66; '
 
 
 def _cancelled_look(cancel_check):
@@ -1991,16 +2005,14 @@ def _dispatch_display_gesture(display_id, kind, points, a):
     nonce = str(int(time.time() * 1000))
     cmd = "手势屏:%d:%s:%d:%d:%d:%d:%d:%s" % (display_id, kind, int(x1), int(y1), int(x2), int(y2), ms, nonce)
     path = LOOK_DIR + "/gesture-" + nonce + ".json"
-    script = (_CLOCK_SH + _BROADCAST + shlex.quote(cmd) + " >/dev/null; rc=$?; "
+    script = (_FILES_SH + _CLOCK_SH + _BROADCAST + shlex.quote(cmd) + " >/dev/null; rc=$?; "
               "printf 'DSB_SUBMITTED\\n'; [ $rc -eq 0 ] || exit $rc; "
-              "t0=$(now_ms); j=''; "
+              't0=$(now_ms); : > "$tmp/receipt" || exit 66; '
               "while [ $(( $(now_ms) - t0 )) -lt 6000 ]; do "
-              "j=$(cat " + path + " 2>/dev/null); "
-              "case \"$j\" in *" + nonce + "*) "
-              "if printf '%s' \"$j\" | grep -Eq '\"status\"[[:space:]]*:[[:space:]]*\"(completed|cancelled|rejected)\"'; "
-              "then break; fi;; esac; sleep 0.1; done; "
-              "printf 'DSB_RECEIPT %s\\n' \"$(printf '%s' \"$j\" | wc -c | tr -d ' ')\"; "
-              "printf '%s' \"$j\"")
+              "if ! cp " + path + ' "$tmp/receipt" 2>/dev/null; then : > "$tmp/receipt" || exit 66; fi; '
+              "if grep -qF " + nonce + ' "$tmp/receipt" && '
+              "grep -Eq '\"status\"[[:space:]]*:[[:space:]]*\"(completed|cancelled|rejected)\"' \"$tmp/receipt\"; "
+              'then break; fi; sleep 0.1; done; emit_frame RECEIPT "$tmp/receipt" || exit 66; ')
     rec = {}
     try:
         raw = _sh("exec-out", script, t=15, checked=True)
