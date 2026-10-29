@@ -92,7 +92,22 @@ check_env() {
   trap 'log "安装已中断；可重跑续装"; exit 130' INT TERM
 }
 
+request_profile_restart() {
+  local marker="$HOME/.dsb-ipc/restart-required" owner
+  [ ! -L "$HOME/.dsb-ipc" ] || fail 'IPC 目录不能是符号链接'
+  mkdir -p "$HOME/.dsb-ipc"
+  if [ -e "$marker" ] || [ -L "$marker" ]; then
+    [ -f "$marker" ] && [ ! -L "$marker" ] || fail '重启标记类型异常，请人工核对'
+    owner=$(cat -- "$marker")
+    [[ "$owner" =~ ^dsb-installer\ restart-required\ [0-9]+$ ]] || fail '外来重启标记，请人工核对'
+  else
+    (set -C; printf 'dsb-installer restart-required %s\n' "$(date +%s)" > "$marker") || fail '无法持久化重启请求'
+  fi
+}
+
 deploy_files() {
+  # Persist before any deployment mutation, including plugin-only updates.
+  request_profile_restart
   python3 "$SOURCE/installer/configure.py" ubuntu-https "$RF"
   mkdir -p "$HOME/dsb" "$HOME/wx" "$HOME/.dsb-ipc" \
     "$RF/root/.dsh-phone/skills" "$RF/root/dsh-bridge" "$RF/root/termux-dsb" \
@@ -114,17 +129,12 @@ deploy_files() {
     cp "$script" "$RF/root/termux-dsb/"
   done
   cp "$SOURCE"/dsh-config/* "$RF/root/dsh-config/"
-  mkdir -p "$RF/root/dsh-web-tweaks/dsb-brand"
-  mkdir -p "$RF/root/dsh-web-tweaks/dsb-report"
-  cp "$SOURCE"/dsh-web-tweaks/*.py "$SOURCE"/dsh-web-tweaks/*.sh "$RF/root/dsh-web-tweaks/"
-  cp "$SOURCE"/dsh-web-tweaks/dsb-brand/*.js "$SOURCE"/dsh-web-tweaks/dsb-brand/*.mjs \
-    "$SOURCE"/dsh-web-tweaks/dsb-brand/package.json "$SOURCE"/dsh-web-tweaks/dsb-brand/cordis.patch.yml \
-    "$RF/root/dsh-web-tweaks/dsb-brand/"
-  cp "$SOURCE/app/res/mipmap-xxxhdpi/ic_launcher_foreground.png" "$RF/root/dsh-web-tweaks/dsb-brand/source-icon.png"
-  cp "$SOURCE"/dsh-web-tweaks/dsb-report/index.js "$SOURCE"/dsh-web-tweaks/dsb-report/client.js \
-    "$SOURCE"/dsh-web-tweaks/dsb-report/web-turns.mjs \
-    "$SOURCE"/dsh-web-tweaks/dsb-report/package.json "$SOURCE"/dsh-web-tweaks/dsb-report/cordis.patch.yml \
-    "$RF/root/dsh-web-tweaks/dsb-report/"
+  mkdir -p "$RF/root/dsh-web-tweaks"
+  for script in "$SOURCE"/dsh-web-tweaks/*.py "$SOURCE"/dsh-web-tweaks/*.sh; do
+    [ -f "$script" ] || continue
+    cp "$script" "$RF/root/dsh-web-tweaks/"
+  done
+  python3 "$SOURCE/installer/plugin_deploy.py" "$RF" "$SOURCE/dsh-plugin"
   cp "$SOURCE/installer/profiles.py" "$RF/root/.dsb-profiles.py"
   cp "$SOURCE/agent/SKILL.md" "$RF/root/.dsh/skills/dsb-phone/SKILL.md"
   cp "$SOURCE/installer/boot.sh" "$HOME/dsb/boot.sh"
@@ -151,28 +161,122 @@ deploy_files() {
   [ -f "$RF/root/.dsh/settings.yaml" ] || cp "$SOURCE/dsh-config/settings.yaml" "$RF/root/.dsh/settings.yaml"
 }
 
+rollback_profile_files() {
+  local backup_dir="$1" profile name file
+  for profile in web phone headless; do
+    for name in package.json cordis.patch.yml; do
+      file="$RF/root/.dsh/profiles/$profile/$name"
+      if [ -f "$backup_dir/$profile/$name" ]; then cp -p "$backup_dir/$profile/$name" "$file"
+      else rm -f -- "$file"; fi
+    done
+  done
+}
+
 setup_profiles() {
   STAGE=隐私与品牌
   in_ubuntu bash -c '. /root/dsh-config/report-paths.sh; test "$DSB_ACTIVE_TASK_FILE" = /root/.dsh-phone/active-task.json; test "$DSB_AUDIT_FILE" = /root/.dsh-phone/skills/safe_tap_audit.jsonl; test "$BRIDGE_AGENT_DIR" = /root/.dsh-phone/skills'
-  local backup_dir profile manifest
+  request_profile_restart
+  local backup_dir profile name manifest result old_traps
   backup_dir=$(mktemp -d)
+  old_traps=$(trap -p INT TERM)
   for profile in web phone headless; do
-    manifest="$RF/root/.dsh/profiles/$profile/package.json"
-    if [ -f "$manifest" ]; then cp -p "$manifest" "$backup_dir/$profile"; fi
-  done
-  if ! in_ubuntu python3 /root/.dsb-profiles.py /root/.dsh/profiles /root/dsh-web-tweaks/dsb-brand /root/dsh-web-tweaks/dsb-report ||
-     ! in_ubuntu node /root/dsh-web-tweaks/dsb-brand/build.mjs /root/dsh-web-tweaks/dsb-brand/source-icon.png ||
-     ! in_ubuntu bash /root/dsh-config/install-profile-patches.sh ||
-     ! in_ubuntu bash /root/dsh-web-tweaks/apply-all.sh; then
-    for profile in web phone headless; do
-      manifest="$RF/root/.dsh/profiles/$profile/package.json"
-      if [ -f "$backup_dir/$profile" ]; then cp -p "$backup_dir/$profile" "$manifest"
-      else rm -f -- "$manifest"; fi
+    mkdir "$backup_dir/$profile"
+    for name in package.json cordis.patch.yml; do
+      manifest="$RF/root/.dsh/profiles/$profile/$name"
+      [ ! -L "$manifest" ] || fail 'profile 文件不能是符号链接'
+      if [ -f "$manifest" ]; then cp -p "$manifest" "$backup_dir/$profile/$name"; fi
     done
+  done
+  trap 'rollback_profile_files "$backup_dir"; rm -r -- "$backup_dir"; exit 130' INT TERM
+  if ! result=$(in_ubuntu python3 /root/.dsb-profiles.py /root/.dsh/profiles /root/dsh-plugin \
+      bash /root/dsh-config/install-profile-patches.sh); then
+    rollback_profile_files "$backup_dir"
+    trap - INT TERM
+    eval "$old_traps"
     rm -r -- "$backup_dir"
-    fail 'profile 验证失败，已恢复 package.json'
+    fail 'profile 验证失败，已恢复 package.json 与 cordis.patch.yml；修正错误后重跑安装器'
   fi
+  printf '%s\n' "$result"
+  python3 "$SOURCE/installer/plugin_deploy.py" "$RF" --retire-legacy
+  trap - INT TERM
+  eval "$old_traps"
   rm -r -- "$backup_dir"
+}
+
+restore_legacy_index() {
+  local index=/opt/dsb-dsh/node_modules/@deepseek-ai/dsh-web-frontend/dist/index.html state
+  local helper=/root/dsh-plugin/runtime/restore-index.py
+  local pristine=/root/dsh-plugin/runtime/pristine-0.2.1-rc.2.html
+  local marker="$HOME/.dsb-ipc/maintenance" owner='' evidence
+  if [ -e "$marker" ] || [ -L "$marker" ]; then
+    [ -f "$marker" ] && [ ! -L "$marker" ] || fail '已有外来维护标记，请先人工核对'
+    owner=$(cat -- "$marker") || fail '无法读取维护标记，请先人工核对'
+    [[ "$owner" =~ ^dsb-installer\ index-restore\ [0-9]+$ ]] || fail '已有外来维护标记，请先人工核对'
+  fi
+  if [ ! -f "$RF$index" ]; then
+    [ -z "$owner" ] || fail "首页缺失，保留维护态；修复 DSH 安装后重跑：bash '$SOURCE/install.sh'"
+    return 0
+  fi
+  state=$(in_ubuntu python3 "$helper" --index "$index" --check-legacy) ||
+    fail "无法检查旧首页补丁；修复上方文件/权限错误后重跑：bash '$SOURCE/install.sh'"
+  if ! grep -qx legacy <<<"$state"; then
+    grep -qx untouched <<<"$state" || fail '首页检查未返回可识别状态，停止安装'
+    if [ -n "$owner" ]; then
+      request_profile_restart
+      [ -f "$marker" ] && [ ! -L "$marker" ] && [ "$(cat -- "$marker")" = "$owner" ] ||
+        fail '维护标记归属已变化，未删除；请先人工核对'
+      evidence=$(mktemp "$HOME/.dsb-ipc/index-restore-evidence.XXXXXXXX")
+      printf '%s\nstatus=untouched\n' "$owner" > "$evidence"
+      rm -- "$marker" || fail '无法清理安装器遗留维护标记'
+      log '首页已无旧补丁，已保存证据并清理安装器遗留维护标记；启动阶段将重启 DSH'
+    fi
+    return 0
+  fi
+  # Hold maintenance only while stopping DSH and restoring the disk shell.
+  request_profile_restart
+  if [ -z "$owner" ]; then
+    owner="dsb-installer index-restore $(date +%s)"
+    (set -C; printf '%s\n' "$owner" > "$marker") || fail '已有维护标记，请先人工核对'
+  fi
+  pkill -f '[d]sh web' 2>/dev/null || [ "$?" = 1 ] || fail "停止 DSH 失败；检查进程权限后重跑：bash '$SOURCE/install.sh'"
+  local attempt status=0
+  for attempt in {1..30}; do
+    if pgrep -f '[d]sh web' >/dev/null; then status=0; else status=$?; fi
+    [ "$status" -le 1 ] || fail "无法确认 DSH 停止，未恢复首页；修复 pgrep/进程权限后重跑：bash '$SOURCE/install.sh'"
+    [ "$status" != 1 ] || break
+    sleep 1
+  done
+  [ "$status" = 1 ] || fail "DSH 未停止，保留维护态；在 Termux 停止残留 DSH 进程后重跑：bash '$SOURCE/install.sh'"
+  if ! in_ubuntu python3 "$helper" --index "$index" --pristine "$pristine"; then
+    fail "首页恢复失败，保留维护态和原备份；先处理上方磁盘/权限/资源版本错误，再在 Ubuntu 运行：python3 $helper --index $index --pristine ${pristine}；成功后在 Termux 重跑：bash '$SOURCE/install.sh'（会自动清理本安装器标记）"
+  fi
+  [ -f "$marker" ] && [ ! -L "$marker" ] && [ "$(cat -- "$marker")" = "$owner" ] ||
+    fail '维护标记归属已变化，未删除；请先人工核对'
+  rm -- "$marker" || fail '无法移除本次恢复维护标记'
+  log '旧首页补丁已恢复为随包纯净版，已退出恢复维护态；启动阶段将重启 DSH'
+}
+
+restart_profile_service() {
+  local marker="$HOME/.dsb-ipc/restart-required" before after pid owner output token status
+  [ ! -e "$HOME/.dsb-ipc/maintenance" ] && [ ! -L "$HOME/.dsb-ipc/maintenance" ] || fail '仍处于维护态，无法重启 DSH'
+  [ -e "$marker" ] || [ -L "$marker" ] || return 0
+  request_profile_restart
+  owner=$(cat -- "$marker")
+  status=0; before=$(pgrep -f '[d]sh web') || status=$?
+  [ "$status" -le 1 ] || fail '无法读取重启前 DSH 进程，保留重启请求'
+  output=$(bash "$HOME/start-dsh.sh" --restart 8>&-) || fail 'DSH 重启失败，保留重启请求；修复错误后重跑安装器'
+  grep -qx 'NO_TOKEN_FOUND' <<<"$output" && fail 'DSH 未获得认证地址，保留重启请求；检查 dsh-web.log 后重跑安装器'
+  after=$(pgrep -f '[d]sh web') || fail '未发现新 DSH 进程，保留重启请求；检查 dsh-web.log 后重跑安装器'
+  [ -n "$after" ] || fail '未发现新 DSH 进程，保留重启请求'
+  for pid in $before; do
+    if grep -qx "$pid" <<<"$after"; then fail '旧 DSH 进程仍在，未完成重启；保留请求，请处理旧进程后重跑安装器'; fi
+  done
+  [ -s "$HOME/.dsh-web-token" ] && [ ! -L "$HOME/.dsh-web-token" ] || fail '认证地址缺失，保留重启请求；重跑安装器'
+  token=$(cat "$HOME/.dsh-web-token")
+  bash "$HOME/dsb/ready-probe.sh" "$token" || fail '新 DSH 插件未就绪，保留重启请求；检查 dsh-web.log 后重跑安装器'
+  [ -f "$marker" ] && [ ! -L "$marker" ] && [ "$(cat -- "$marker")" = "$owner" ] || fail '重启请求归属已变化，未删除'
+  rm -- "$marker"
+  log '已受控重启 DSH，验证旧进程退出、新进程及客户端插件就绪；清除持久重启请求'
 }
 
 setup_ssh() {
@@ -552,6 +656,7 @@ main_locked() {
   DSH_VERSION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dsh_version"])' "$SOURCE/installer/release.json")
   in_ubuntu bash /root/.dsb-container-deps.sh "$DSH_VERSION" "$ADB_SERVER_SOCKET"
   rmdir "$PACKAGE_ADB_DIRECTORY"
+  restore_legacy_index
   setup_profiles
   setup_key
   harden_adb
@@ -563,6 +668,7 @@ main_locked() {
   install_apk
   guide_permissions
   STAGE=启动
+  restart_profile_service
   bash "$HOME/dsb/boot.sh" 8>&- || \
     log '服务未全部启动；doctor 将报告实际状态，任务桥归属不明时不能自动清理账本'
   log '等待网页首次装载完成（最多 150 秒，不调用模型）'

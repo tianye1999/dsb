@@ -2,6 +2,8 @@
 
 **English** · [简体中文](INSTALL.zh-CN.md)
 
+For the DSH bundle, local installation and migration from old frontend patches, see [dsh-dsb](../dsh-plugin/README.md).
+
 No root and no computer connection are needed. Requirements: Android 11+, 64-bit arm64 / x86_64, and we recommend keeping at least 8 GB free (the first download and unpacking also need temporary space). The only service credential you need is a **DeepSeek API key**. The wireless pairing code is Android's one-time authorization, not a second service key.
 
 > The v1.0.3 installer is a candidate: validation so far is limited to the maintainer's device and an arm64 emulator; frozen first-install and other-ROM acceptance are still pending. The download command below pins the release tarball's SHA-256 (matching `SHA256SUMS` in the release); nothing is unpacked or run if it does not match. The APK is signed with the maintainer's existing release key, and the installer checks it against a pinned certificate SHA-256. The installer's emulator tests use a debug signature only, never the release key.
