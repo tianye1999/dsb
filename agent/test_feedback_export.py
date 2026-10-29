@@ -28,6 +28,26 @@ def contents(package):
 
 
 class FeedbackExportTests(unittest.TestCase):
+    def test_batch_metadata_survives_without_free_text(self):
+        batch_id = "b" + "a" * 32
+        row = {"task_id": TASK, "kind": "tap", "batch_id": batch_id,
+               "batch_index": 2, "batch_size": 3, "expect": "private target",
+               "reason": "private reason"}
+        with zipfile.ZipFile(io.BytesIO(build_zip([row], {}, TASK, False))) as package:
+            exported = json.loads(package.read("audit.jsonl"))
+        self.assertEqual((exported["batch_id"], exported["batch_index"], exported["batch_size"]),
+                         (batch_id, 2, 3))
+        self.assertNotIn("private target", json.dumps(exported))
+        self.assertNotIn("private reason", json.dumps(exported))
+        invalid = redact({"batch_id": "bSECRET", "batch_index": True, "batch_size": -1})
+        self.assertTrue(invalid["batch_id"]["removed"])
+        self.assertTrue(invalid["batch_index"]["removed"])
+        self.assertTrue(invalid["batch_size"]["removed"])
+        uuid_shaped = redact({"batch_id": TASK})
+        self.assertTrue(uuid_shaped["batch_id"]["removed"])
+        self.assertEqual(redact({"batch_size": 0})["batch_size"], 0)
+        self.assertEqual(redact({"batch_size": 7})["batch_size"], 7)
+
     def test_no_screenshot_cli_does_not_need_pillow(self):
         with tempfile.TemporaryDirectory() as directory:
             audit = Path(directory) / "audit.jsonl"

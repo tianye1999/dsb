@@ -23,11 +23,13 @@ APP = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+")
 ACTIVITY = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+/\.[A-Za-z0-9_.$]+")
 ISO_TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}\+00:00")
 SHOT_NAME = re.compile(r"(?:shot|before|after)-([0-9]{13})\.(?:jpg|jpeg|png)")
+BATCH_ID = re.compile(r"b[0-9a-f]{32}")
 
 VOCAB = task_report.VOCABULARY
 ENUMS = {
     "kind": set(VOCAB["action_kinds"]) | {"task_start", "task_end", "report_task_start",
-        "report_task_end", "report_attribution_conflict", "recovery", "command_gate", "read"},
+        "report_task_end", "report_attribution_conflict", "recovery", "command_gate", "read",
+        "batch_stop"},
     "action_type": set(VOCAB["actions"]), "result": set(VOCAB["results"]),
     "reason_code": set(VOCAB["reasons"]),
     "op": set(VOCAB["read_ops"]), "action": {"stop_for_human"},
@@ -53,14 +55,15 @@ BOOL_FIELDS = {"allowed", "ok", "goal_verified", "ui_reacted", "tree_changed", "
 NUMBER_FIELDS = {"ts", "elapsed_s", "duration_s", "audit_offset", "display_id", "exit_code",
                  "settle_ms", "settle_polls", "ev_count_before", "ev_count_after", "schema_version",
                  "dispatched_actions", "command_hook_refusals", "command_hook_shadow_would_block",
-                 "typesafe_unavailable_warnings", "handoff_points", "x", "y", "x1", "y1", "x2", "y2"}
-OBJECT_FIELDS = {"task", "counts", "coverage", "vision", "r3", "shot_before_meta",
+                 "typesafe_unavailable_warnings", "handoff_points", "x", "y", "x1", "y1", "x2", "y2",
+                 "batch_index", "batch_size"}
+OBJECT_FIELDS = {"task", "counts", "coverage", "vision", "r3", "r3_anchor", "shot_before_meta",
                  "shot_after_meta", "gate_refusals_by_reason"}
 LIST_FIELDS = {"timeline", "points"}
 APP_FIELDS = {"pkg", "fg"}
 ACTIVITY_FIELDS = {"act_before", "act_after"}
 TIME_FIELDS = {"started_at", "ended_at", "at"}
-ID_FIELDS = {"task_id"}
+ID_FIELDS = {"task_id", "batch_id"}
 FREE_TEXT_FIELDS = {"note", "expect", "reason", "explanation", "command", "task_name",
                     "shot_before", "shot_after", "app"}
 
@@ -111,10 +114,16 @@ def _redact_field(key, value, row, depth):
     if key in BOOL_FIELDS and type(value) is bool:
         return value
     if key in NUMBER_FIELDS and _number(value):
+        if key == "batch_index" and (type(value) is not int or not 1 <= value <= 6):
+            return _removed(value)
+        if key == "batch_size" and (type(value) is not int or value < 0):
+            return _removed(value)
         return value
     if key in ENUMS and isinstance(value, str) and value in ENUMS[key]:
         return value
-    if key in ID_FIELDS and isinstance(value, str) and task_report.TASK_ID_RE.fullmatch(value):
+    if key == "batch_id" and isinstance(value, str) and BATCH_ID.fullmatch(value):
+        return value
+    if key in ID_FIELDS and key != "batch_id" and isinstance(value, str) and task_report.TASK_ID_RE.fullmatch(value):
         return value
     if key == "pkg" and isinstance(value, str) and APP.fullmatch(value) and any(
             _package_part(row.get(field)) == value for field in ("act_before", "act_after", "fg")):
