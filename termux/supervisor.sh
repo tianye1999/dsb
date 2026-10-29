@@ -11,13 +11,23 @@ echo $$ > "$PIDFILE"
 trap 'rm -f "$PIDFILE"; exit 0' TERM INT
 port3080() { python3 -c "import socket,sys; s=socket.socket(); s.settimeout(1); sys.exit(0 if s.connect_ex(('127.0.0.1',3080))==0 else 1)"; }
 port3001() { python3 -c "import socket,sys; s=socket.socket(); s.settimeout(1); sys.exit(0 if s.connect_ex(('127.0.0.1',3001))==0 else 1)"; }
+dsh_up_running() {
+  [ -f "$HOME/dsb/.dsh-up.lock" ] || return 1
+  (
+    exec 9>>"$HOME/dsb/.dsh-up.lock" || exit 0
+    flock -n 9 && exit 1
+    exit 0
+  )
+}
 while true; do
   # ⚠️ 2026-09-23 修：原来这里没后台化（sshd >/dev/null 2>&1）。
   #    如果 sshd 不是自动 daemon 化而是前台运行，这行会**永久阻塞**整个 while 循环 ——
   #    实测 supervisor 卡在 do_wait 里，TTS / auto-commit 守护全都没被拉起。
   pgrep -x sshd >/dev/null 2>&1 || setsid nohup sshd >/dev/null 2>&1 </dev/null &
   "$HOME/wx/wx_adb_connect.sh" >/dev/null 2>&1
-  port3080 || setsid nohup "$HOME/wx/start-dsh.sh" >/dev/null 2>&1 </dev/null &
+  if ! port3080 && ! dsh_up_running; then
+    setsid nohup "$HOME/wx/start-dsh.sh" >/dev/null 2>&1 </dev/null &
+  fi
 
   # ── 2026-09-25 补：git 自动提交守护的拉起块 ─────────────────────────
   # ⚠️ 记忆里一直说"挂在 supervisor"，实际这个块根本不存在（当天实测发现）——

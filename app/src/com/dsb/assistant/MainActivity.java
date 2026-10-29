@@ -66,6 +66,7 @@ public class MainActivity extends Activity {
     private Runnable retryReensure;
     private Runnable recoveryProgress;
     private static final long RECOVERY_WINDOW_MS = 90000;
+    private static final long STARTUP_RETRY_MS = 1000;
     private long recoveryStartedAt = -1;
     private long lastRecoveryBoot = -1;
     private int recoveryGeneration;
@@ -365,15 +366,12 @@ public class MainActivity extends Activity {
     }
 
     /** One queued cache read; the deadline also covers a new URL that never finishes loading. */
-    private int reensureCount;
-
     private void maybeReensure() {
         if (destroyed || ensuring || retryReensure != null) return;
         beginRecovery();
         if (recoveryExpired()) { exhaustRecovery(); return; }
-        long delay = Math.min(1000L << Math.min(reensureCount, 3),
+        long delay = Math.min(STARTUP_RETRY_MS,
                 RECOVERY_WINDOW_MS - (SystemClock.elapsedRealtime() - recoveryStartedAt));
-        reensureCount++;
         retryReensure = () -> {
             retryReensure = null;
             ensureAndLoad();
@@ -385,7 +383,6 @@ public class MainActivity extends Activity {
         cancelRecoveryWork();
         recoveryStartedAt = -1;
         lastRecoveryBoot = -1;
-        reensureCount = 0;
         retryBtn.setVisibility(View.GONE);
     }
 
