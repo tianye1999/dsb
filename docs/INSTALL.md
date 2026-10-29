@@ -6,7 +6,7 @@ For the DSH bundle, local installation and migration from old frontend patches, 
 
 No root and no computer connection are needed. Requirements: Android 11+, 64-bit arm64 / x86_64, and we recommend keeping at least 8 GB free (the first download and unpacking also need temporary space). The only service credential you need is a **DeepSeek API key**. The wireless pairing code is Android's one-time authorization, not a second service key.
 
-> The v1.0.3 installer is a candidate: validation so far is limited to the maintainer's device and an arm64 emulator; frozen first-install and other-ROM acceptance are still pending. The download command below pins the release tarball's SHA-256 (matching `SHA256SUMS` in the release); nothing is unpacked or run if it does not match. The APK is signed with the maintainer's existing release key, and the installer checks it against a pinned certificate SHA-256. The installer's emulator tests use a debug signature only, never the release key.
+> The v1.0.4 installer is a candidate: validation so far is limited to the maintainer's device and an arm64 emulator; frozen first-install and other-ROM acceptance are still pending. The download command below pins the release tarball's SHA-256 (matching `SHA256SUMS` in the release); nothing is unpacked or run if it does not match. The APK is signed with the maintainer's existing release key, and the installer checks it against a pinned certificate SHA-256. The installer's emulator tests use a debug signature only, never the release key.
 
 > [!WARNING]
 > **Install DSB only from this project.** The official command is the one in the project README and this guide: it saves the release tarball from `github.com/tianye1999/dsb/releases/download/…` to a file, checks it against the SHA-256 shown on this page (the same value as `SHA256SUMS` in that release), and only then unpacks it. It never pipes a download into `bash` or `sh`. Do not run install, upgrade or repair commands, or open APK links, posted in issues, discussions, comments or messages, even if they say they come from a maintainer. Termux itself comes from F-Droid or the Termux GitHub releases, as the install guide says. If you already ran a command or installed an APK from somewhere else, see [what to do](../SECURITY.md#impersonated-install-commands).
@@ -24,8 +24,10 @@ After installing, do not tap "Open" yet; first finish the script's permission wa
 Open Termux, wait for the first-run setup to finish, then run:
 
 ```bash
-curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.3/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' 'af9d85a726f939c89261eed755ff063ae3274a732aacfa899eb46e2ba453b3c6' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
+curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.4/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' '1119df5a2da9f138396c69a6354c02dd92c0281d41bfcb76b48bba61ddb9ecc1' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
 ```
+
+> **Upgrading from an earlier release:** rerun the command above. The installer moves the old web tweaks to the `dsh-dsb` bundle and restarts DSH for you. It keeps the DSB app you already have, so also install `DSB-1.0.4.apk` from the [v1.0.4 release](https://github.com/tianye1999/dsb/releases/tag/v1.0.4): open it and choose Update; your data and permissions stay.
 
 The first run updates Termux's base libraries and installs Ubuntu 24.04, Node/dsh, Python/OCR and scrcpy, so it downloads a lot. The network must reach Termux, GitHub, Ubuntu, nodejs.org, npm and PyPI. You can interrupt with `Ctrl-C`; rerun `bash ~/dsb-installer/install.sh` to continue. Rerunning does not delete the container, sessions or key, and does not add SSH authorization twice.
 
@@ -36,6 +38,17 @@ The official Ubuntu repositories use HTTPS. If the minimal image lacks CA certif
 The installer syncs the current public version's web tweaks and the DSB brand bundle. The brand is added through the web profile's bundles and a local package link, without reinstalling existing profile dependencies, and local customizations are kept. Session-log upload is off by default for the web, phone and headless profiles, and the installer reads the effective value back with dsh `--dump-config`. The workspace is `/root/dsb-workspaces`; `/root`, which holds the key and SSH private key, is not used as a workspace.
 
 The installer explains and enables Termux's `allow-external-apps`. DSB needs it to start local services through the official `RUN_COMMAND` interface, and the system still asks you to grant DSB that permission separately. **Never give an untrusted app permission to run Termux commands**: with it, the app can read and write all data of the same Termux user, including the key.
+
+### Verifying the release (optional)
+
+Starting with v1.0.4, each release publishes a GitHub build-provenance attestation for its installer tarball: a GitHub-hosted workflow rebuilt the tarball from the tagged public source, confirmed it matches the release file byte for byte, and signed that digest. On a computer with the GitHub CLI, run this in the folder that holds the downloaded `dsb-installer.tar.gz`:
+
+```bash
+gh attestation verify dsb-installer.tar.gz --repo tianye1999/dsb \
+  --signer-workflow tianye1999/dsb/.github/workflows/release-provenance.yml --deny-self-hosted-runners
+```
+
+With these flags a passing check means the attestation was signed by this repository's `release-provenance` workflow on a GitHub-hosted runner. It does not replace the SHA-256 check in the command above.
 
 ## 3. Enter your DeepSeek API key
 

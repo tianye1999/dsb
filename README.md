@@ -86,10 +86,10 @@ Steps: **install official Termux and DSB -> run one command in Termux -> enter t
 For device identifiers, connection targets and fixed local defaults, see [device-specific values](docs/INSTALL.md#device-specific-values-what-needs-adjusting).
 
 ```bash
-curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.3/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' 'af9d85a726f939c89261eed755ff063ae3274a732aacfa899eb46e2ba453b3c6' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
+curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.4/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' '1119df5a2da9f138396c69a6354c02dd92c0281d41bfcb76b48bba61ddb9ecc1' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
 ```
 
-The download command pins the release tarball's SHA-256 (matching `SHA256SUMS` in the [v1.0.3 release](https://github.com/tianye1999/dsb/releases/tag/v1.0.3)); nothing is unpacked or run unless it verifies. The APK is signed with the maintainer's existing release key, and the installer accepts it only after checking the pinned signing-certificate SHA-256. The all-in-one APK that needs no separate setup remains on the [roadmap](docs/ROADMAP.md).
+The download command pins the release tarball's SHA-256 (matching `SHA256SUMS` in the [v1.0.4 release](https://github.com/tianye1999/dsb/releases/tag/v1.0.4)); nothing is unpacked or run unless it verifies. Upgrading from an earlier release also needs the new app: see [upgrading](docs/INSTALL.md#2-run-one-command-in-termux). The APK is signed with the maintainer's existing release key, and the installer accepts it only after checking the pinned signing-certificate SHA-256. The all-in-one APK that needs no separate setup remains on the [roadmap](docs/ROADMAP.md).
 
 ## Roadmap (planned, not implemented)
 

@@ -86,10 +86,10 @@ DSH 侧的品牌、执行报告与界面调整已合为可安装的 [dsh-dsb 插
 设备标识、连接目标与固定端口是否需要调整，见[设备相关数值](docs/INSTALL.zh-CN.md#设备相关数值哪些需要调整)。
 
 ```bash
-curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.3/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' 'af9d85a726f939c89261eed755ff063ae3274a732aacfa899eb46e2ba453b3c6' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
+curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.4/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' '1119df5a2da9f138396c69a6354c02dd92c0281d41bfcb76b48bba61ddb9ecc1' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
 ```
 
-下载命令内联了发布包的 SHA-256（与 [v1.0.3 Release](https://github.com/tianye1999/dsb/releases/tag/v1.0.3) 附带的 `SHA256SUMS` 一致），校验不通过就不会解包执行。APK 用维护者现有发布密钥签名，安装器按固定的证书 SHA-256 验签后才接受。「装一个 App 就够」的全合一 APK 仍在[路线图](docs/ROADMAP.zh-CN.md)上。
+下载命令内联了发布包的 SHA-256（与 [v1.0.4 Release](https://github.com/tianye1999/dsb/releases/tag/v1.0.4) 附带的 `SHA256SUMS` 一致），校验不通过就不会解包执行。从旧版本升级时还要装新版 App，见[升级说明](docs/INSTALL.zh-CN.md#2-termux-里跑一条命令)。APK 用维护者现有发布密钥签名，安装器按固定的证书 SHA-256 验签后才接受。「装一个 App 就够」的全合一 APK 仍在[路线图](docs/ROADMAP.zh-CN.md)上。
 
 ## 路线图（计划中，未实现）
 
