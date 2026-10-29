@@ -6,7 +6,7 @@ DSH 插件包的本地安装与旧前端补丁迁移见 [dsh-dsb 说明](../dsh-
 
 不需要 root，不需要电脑常连。Android 11+，64 位 arm64 / x86_64，建议预留至少 8 GB 空间，首次下载与解包也会临时占用空间。你唯一需要准备的服务配置是 **DeepSeek API Key**。无线配对码是 Android 的一次性授权，不是第二个服务 Key。
 
-> v1.0.3 安装器为候选版：验证范围目前限于维护者的一台真机与 arm64 模拟器，冻结首装和不同 ROM 验收尚待完成。下面的下载命令内联了发布包的 SHA-256（与 Release 附带的 `SHA256SUMS` 一致），校验不通过不会解包执行。APK 由维护者现有发布密钥签名，安装器按固定的证书 SHA-256 验签；安装器的模拟器测试仅用 debug 签名，不使用发布密钥。
+> v1.0.4 安装器为候选版：验证范围目前限于维护者的一台真机与 arm64 模拟器，冻结首装和不同 ROM 验收尚待完成。下面的下载命令内联了发布包的 SHA-256（与 Release 附带的 `SHA256SUMS` 一致），校验不通过不会解包执行。APK 由维护者现有发布密钥签名，安装器按固定的证书 SHA-256 验签；安装器的模拟器测试仅用 debug 签名，不使用发布密钥。
 
 > [!WARNING]
 > **逗沙包只从本项目安装。** 官方命令只有项目 README 和本安装说明里这一条：先把发布包从 `github.com/tianye1999/dsb/releases/download/…` 下载成文件，核对它的 SHA-256 与本页写的值一致（也就是该 Release 里 `SHA256SUMS` 的值），然后才解包；它从不把下载内容直接交给 `bash` 或 `sh` 执行。Issues、讨论区、评论、私信或其他消息里贴出的安装、升级、修复命令和 APK 链接，一律不要运行或打开，即使对方自称维护者。Termux 本身按安装说明从 F-Droid 或 Termux GitHub Release 安装。如果已经运行了别处的命令或装过别处的 APK，请看[怎么处理](../SECURITY.zh-CN.md#冒充的安装命令)。
@@ -24,8 +24,10 @@ DSH 插件包的本地安装与旧前端补丁迁移见 [dsh-dsb 说明](../dsh-
 打开 Termux，等待首次初始化，然后执行：
 
 ```bash
-curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.3/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' 'af9d85a726f939c89261eed755ff063ae3274a732aacfa899eb46e2ba453b3c6' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
+curl -fL https://github.com/tianye1999/dsb/releases/download/v1.0.4/dsb-installer.tar.gz -o ~/dsb-installer.tar.gz && printf '%s  %s\n' '1119df5a2da9f138396c69a6354c02dd92c0281d41bfcb76b48bba61ddb9ecc1' "$HOME/dsb-installer.tar.gz" | sha256sum -c - && tar -xzf ~/dsb-installer.tar.gz -C ~ && bash ~/dsb-installer/install.sh
 ```
+
+> **从旧版本升级**：重跑上面的命令即可。安装器会把旧的网页调整迁移到 `dsh-dsb` 插件包，并自动重启 DSH。它会保留你已经装好的逗沙包 App，所以请再到 [v1.0.4 Release](https://github.com/tianye1999/dsb/releases/tag/v1.0.4) 安装 `DSB-1.0.4.apk`：打开后选「更新」，数据和授权都会保留。
 
 首次会更新 Termux 的基础库、安装 Ubuntu 24.04、Node/dsh、Python/OCR、scrcpy，下载量较大。网络需可访问 Termux、GitHub、Ubuntu、nodejs.org、npm、PyPI。`Ctrl-C` 可以中断；重跑 `bash ~/dsb-installer/install.sh` 继续，不删除容器、会话或 Key，也不重复添加 SSH 授权。
 
@@ -36,6 +38,17 @@ Ubuntu 官方软件源使用 HTTPS；最小镜像缺少 CA 时，先使用 Termu
 安装器同步当前公开版的网页调整和逗沙包品牌包。品牌通过 web profile 的 bundles 与本地包链接接入，不重装已有 profile 依赖；保留本地自定义。web、phone、headless 的会话日志上传默认关闭，写入后用实际 dsh `--dump-config` 读回核验。工作区使用 `/root/dsb-workspaces`，不把存有 Key/SSH 私钥的 `/root` 当作工作区。
 
 安装器会说明并开启 Termux 的 `allow-external-apps`。这是逗沙包通过官方 `RUN_COMMAND` 接口启动本机服务的前提；系统仍要求你给逗沙包单独授权。**不要给不信任的 App 运行 Termux 命令的权限**，获得它就能读写同一 Termux 用户的数据和 Key。
+
+### 验证发布包（可选）
+
+从 v1.0.4 起，每个 Release 都为安装器发布包（`dsb-installer.tar.gz`）签发一份 GitHub 构建来源证明：GitHub 托管的工作流从带标签的公开源码重建这个发布包，确认与 Release 附件逐字节一致后，对其摘要签名。在装有 GitHub CLI 的电脑上，进入存放 `dsb-installer.tar.gz` 的目录运行：
+
+```bash
+gh attestation verify dsb-installer.tar.gz --repo tianye1999/dsb \
+  --signer-workflow tianye1999/dsb/.github/workflows/release-provenance.yml --deny-self-hosted-runners
+```
+
+带上这些参数时，通过即说明这份证明由本仓库的 `release-provenance` 工作流在 GitHub 托管的机器上签发；它不代替上面命令里的 SHA-256 校验。
 
 ## 3. 填 DeepSeek API Key
 

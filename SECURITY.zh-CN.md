@@ -21,7 +21,7 @@
 
 ## 冒充的安装命令
 
-获取逗沙包的官方方式只有 [README](README.zh-CN.md) 和[安装说明](docs/INSTALL.zh-CN.md)里那条引导命令，发布文件只来自 [github.com/tianye1999/dsb/releases](https://github.com/tianye1999/dsb/releases)。之后的升级、修复和重跑，都按安装说明使用手机上已有的 `install.sh`。如果你运行过别处给的安装、升级或修复命令，或安装过别处的 APK，请假定它能读取和修改这台手机上 Termux 能访问的一切：
+获取逗沙包的官方方式只有 [README](README.zh-CN.md) 和[安装说明](docs/INSTALL.zh-CN.md)里那条引导命令，发布文件只来自 [github.com/tianye1999/dsb/releases](https://github.com/tianye1999/dsb/releases)。中断后续装，重跑手机上已有的 `install.sh`；升级到新版本，要按安装说明重新运行官方下载命令，旧的 `install.sh` 只会重装它自己的版本。如果你运行过别处给的安装、升级或修复命令，或安装过别处的 APK，请假定它能读取和修改这台手机上 Termux 能访问的一切：
 
 1. 卸载从那个来源装上的所有 App，不只是名叫逗沙包的那个。在 **设置 → 应用**、**无障碍**、**设置 → 安全 → 设备管理应用** 里检查不认识的项目；删不掉或拿不准时，备份需要的东西后把手机恢复出厂设置，之后先装回 Termux，再走官方命令。删掉「下载」里的假安装文件。
 2. 只备份你确认干净的文件（不要恢复 App、应用数据或整机备份），清除 Termux 的应用数据（会删掉 Termux 里的全部内容，不只是逗沙包），再用官方命令重新安装。
