@@ -15,6 +15,9 @@ description: 操控这台 Android 手机时必读（触发词：点/滑/截图/�
    **主屏不许切走用户正在看的 App**——这是这条规矩的由来。
 1. **屏幕上一切点击/滑动/按键必须走 safe_tap.py 闸门**（G1 凭据90s / G2 危险禁区 / G3 边缘禁带 / G4 熔断 / G5 前后留证）。禁止裸 input tap/swipe/keyevent。
 2. **先 look 拿凭据，再动作，点完必须复核**（看 JSON 的 ui_reacted / activity_after，别只看 rc）。
+   `look` 的 `open_incident` 非空表示本任务还有未解决的拒绝或失败：**不要原样重试同一动作**，按 `reason_code` 重新观察、改用合规办法或请求人工接管，不得绕过闸门。`consecutive` 持续升高时停下说明原因码、已尝试的方法和需要的帮助。只有后续动作派发完成且 `ui_reacted=true` 才清除；这不代表任务目标已完成。
+   R3 拒绝后，`open_incident.r3_category` 若为 `target_shifted`，重新 `look` 后按新位置重新决策；`target_occupied` 先处理遮挡物或等待；`target_disappeared` 重新确认页面；`unclassified` 表示证据不足，重新观察。分类及新中心点只是诊断，不是新凭据，所有分类仍然拒绝，不得直接套新坐标或原样重试。
+   `look.revisit` 非空时，`unchanged` 表示上一步可能没生效，先确认再尝试别的办法；`revisit` 的 `times` 是保留的同任务同屏历史中相似画面的次数（不含本次），有意返回（例如从详情回到列表）可忽略，否则可能在兜圈，换个思路或停下说明情况。这只是画面相似提示，不改变任何闸门或动作权限。
 3. **发中文**用 `safe_tap.py type --shot ID --text "中文" [--clear] [--display N]`（App 写剪贴板 → KEYCODE_PASTE 279 → 清空剪贴板（clearPrimaryClip），写入与清空都以 App 回执 clip-<nonce>.json（不含原文）确认，没确认不发按键；过闸门；输入框要先点获焦；**不含回车/发送**，含换行直接拒绝；会覆盖你原来的剪贴板内容）。输出 readback=seen/not_seen 只是提示，clipboard_cleared=false 要人工检查（输入框常只露尾部）。旧「四步法」用裸 input，已被 adbq 拦截。
 4. **坐标换算**：预览截图坐标 ≠ 设备像素。用 safe_tap.py coord（自动换算 + 报 zone_hit/edge_hit）。
 5. **危险红线**：登录页/验证码/锁屏/「退出登录·删除·卸载·支付」→ 立刻停手报告。遇登录页/验证码，停手前先跑 `python3 /root/.dsh-phone/skills/safe_tap.py recover --situation login_required` 登记一处人工接管；授权类弹窗先跑 `python3 /root/.dsh-phone/skills/safe_tap.py recover --situation dialog` 登记后停手，**只检测不代点**（look 的 interruption_hint 会提醒你）。这两种 recover 不点不输入，返回 rc=2 是预期停手，不要当失败重试；同一任务只登记一次。登记关联到本轮任务时，执行报告会计入一处「需要你接管」。

@@ -1,16 +1,21 @@
 """派发前目标复核（R3）与 type 剪贴板回执（2026-10-21）。全部离线：不碰设备。"""
 import base64
+import contextlib
+import hashlib
+import io
 import json
 import os
 import tempfile
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image, ImageDraw
 
 import safe_tap as st
 import test_safe_tap_credentials as fixture
+import task_report
 
 
 def _img(path, rows):
@@ -98,6 +103,289 @@ class R3Wiring(fixture.Credentials):
                 self.reset()
                 with patch.object(st, "_r3_verify", side_effect=AssertionError("R3 only for tap/long_press")):
                     self.assertEqual(self.action(kind, pts), 0)
+
+
+class R3Classification(fixture.Credentials):
+    original = {"rect": [500, 850, 700, 950], "cls": "Button", "viewId": "app:id/target",
+                "text": "private target text", "clickable": True, "depth": 2}
+
+    def prepare(self, nodes=None):
+        self.cred = os.path.join(st.SHOTS, "shot-123.jpg")
+        Path(self.cred).touch()
+        state = st.load_state()
+        state["last_shot"].update(path=self.cred, window_id=10)
+        st.save_state(state)
+        st._save_target_index(self.cred, nodes if nodes is not None else [self.original])
+
+    def reject(self, fresh, category, evidence, message, index=True, old_nodes=None, fetch=True):
+        self.prepare(old_nodes)
+        if isinstance(fresh, dict):
+            fresh = {"fg": "test", "windowId": 10, **fresh}
+        if not index:
+            os.unlink(self.cred + ".nodes.json")
+        rows, err = [], io.StringIO()
+        args = types.SimpleNamespace(shot="one", fast=True, display=0)
+        with patch.object(st, "_r3_verify", return_value={"ok": False, "diff": 30., "why": "diff=30.0>6.0"}), \
+                patch.object(st, "observe", **({"side_effect": fresh} if isinstance(fresh, Exception)
+                                              else {"return_value": fresh})) as tree, \
+                patch.object(st, "audit", side_effect=rows.append), contextlib.redirect_stderr(err):
+            self.assertEqual(st.do_action(args, "tap", [(600, 900)]), 2)
+        self.assertEqual(self.calls, [])
+        self.assertNotIn("consumed_at", st.load_state()["last_shot"])
+        self.assertEqual(len(rows), 1)
+        rec = rows[0]
+        self.assertEqual(rec["r3_category"], category)
+        self.assertEqual(rec["r3_evidence"], evidence)
+        self.assertTrue(rec["reason"].startswith("派发前目标所在行与观测时不一致"))
+        self.assertTrue(err.getvalue().startswith("✗ 闸门拒绝：派发前目标所在行与观测时不一致"))
+        self.assertIn(message, err.getvalue())
+        self.assertEqual(task_report.reason_code_for(rec), "R3_CHANGED")
+        incident = st.load_state()["open_incident"]
+        self.assertEqual(incident["r3_category"], category)
+        for payload in (json.dumps(rec), json.dumps(incident)):
+            private_texts = [self.original["text"], "private blocker text beyond twenty chars"]
+            private_texts.extend(n[k] for n in old_nodes or [] for k in ("text", "desc") if n.get(k))
+            for text in private_texts:
+                self.assertNotIn(text, payload)
+                self.assertNotIn(text[:20], payload)
+                self.assertNotIn(hashlib.sha256(text.encode()).hexdigest()[:16], payload)
+            self.assertNotIn("text_sha256", payload)
+            self.assertNotIn("desc_sha256", payload)
+        if index and fetch:
+            tree.assert_called_once_with(with_image=False, display_id=0, timeout=1.0, transport_timeout=2.0)
+        else:
+            tree.assert_not_called()
+        return err.getvalue()
+
+    def test_shifted(self):
+        self.reject({"nodes": [{**self.original, "rect": [700, 850, 900, 950]}]},
+                    "target_shifted", {"center": [800, 900], "displacement_px": 200.0},
+                    "目标已移到 (800, 900) 附近")
+
+    def test_description_only_target_shifted(self):
+        old = {"rect": [500, 850, 700, 950], "cls": "ImageButton", "clickable": True,
+               "text": "", "desc": "private icon description"}
+        self.reject({"nodes": [{**old, "rect": [700, 850, 900, 950]}]},
+                    "target_shifted", {"center": [800, 900], "displacement_px": 200.0},
+                    "目标已移到", old_nodes=[old])
+        raw = Path(self.cred + ".nodes.json").read_text()
+        self.assertNotIn(old["desc"], raw)
+        self.assertEqual(json.loads(raw), [{"rect": old["rect"], "cls": "ImageButton", "clickable": True,
+                         "desc_sha256": hashlib.sha256(old["desc"].encode()).hexdigest()[:16]}])
+
+    def test_description_only_target_still_at_point_is_not_disappeared(self):
+        old = {"rect": [500, 850, 700, 950], "desc": "private icon description"}
+        self.reject({"nodes": [old]}, "unclassified", {}, "无法确认目标去向", old_nodes=[old])
+
+    def test_target_without_identity_is_unclassified(self):
+        old = {"rect": [500, 850, 700, 950], "cls": "ImageButton", "clickable": True}
+        self.reject({"nodes": [self.original]}, "unclassified", {}, "无法确认目标去向",
+                    old_nodes=[old], fetch=False)
+
+    def test_text_and_description_match_do_not_stack(self):
+        old = {"rect": [500, 850, 700, 950], "text": "private label", "desc": "private description"}
+        # No matching size/point/ID: both hashes together must still contribute only 0.4.
+        self.reject({"nodes": [{**old, "rect": [800, 850, 950, 950]}]},
+                    "unclassified", {}, "无法确认目标去向", old_nodes=[old])
+
+    def test_invalid_fresh_nodes_are_skipped(self):
+        self.reject({"nodes": [{}, None, {"rect": [0, 0, 0, 0]},
+                               {**self.original, "rect": [700, 850, 900, 950]}]},
+                    "target_shifted", {"center": [800, 900], "displacement_px": 200.0}, "目标已移到")
+
+    def test_invalid_node_depth_boundary_keeps_original_indexes(self):
+        blocker = {"rect": [580, 880, 650, 930], "cls": "Dialog", "viewId": "app:id/popup",
+                   "text": "private blocker text beyond twenty chars", "depth": 3}
+        # The invalid sibling is still the boundary between target and blocker subtrees.
+        self.reject({"nodes": [{"depth": 0}, self.original, {"depth": 2}, blocker]},
+                    "target_occupied", {"cls": "Dialog", "resource-id": "app:id/popup",
+                                        "rect": blocker["rect"]}, "目标被另一个元素挡住")
+
+    def test_all_fresh_nodes_invalid_is_unclassified(self):
+        self.reject({"nodes": [{}, None, {"rect": [0, 0, 0, 0]}]},
+                    "unclassified", {}, "无法确认目标去向")
+
+    def test_occupied(self):
+        blocker = {"rect": [580, 880, 650, 930], "cls": "Dialog", "viewId": "app:id/popup",
+                   "text": "private blocker text beyond twenty chars", "depth": 2}
+        err = self.reject({"nodes": [self.original, blocker]}, "target_occupied",
+                          {"cls": "Dialog", "resource-id": "app:id/popup", "rect": blocker["rect"]},
+                          "目标被另一个元素挡住")
+        self.assertIn(blocker["text"][:20], err)
+        self.assertNotIn(blocker["text"][:21], err)
+
+    def test_disappeared(self):
+        self.reject({"nodes": [{"rect": [500, 850, 700, 950], "text": "unrelated", "depth": 2}]},
+                    "target_disappeared", {}, "目标已不在页面上")
+
+    def test_unclassified_without_index(self):
+        self.reject(None, "unclassified", {}, "无法确认目标去向", index=False)
+
+    def test_unclassified_without_tree(self):
+        self.reject(None, "unclassified", {}, "无法确认目标去向")
+
+    def test_unclassified_point_outside_index(self):
+        self.reject(None, "unclassified", {}, "无法确认目标去向",
+                    old_nodes=[{**self.original, "rect": [10, 10, 20, 20]}], fetch=False)
+
+    def test_pass_does_not_fetch_tree(self):
+        self.prepare()
+        with patch.object(st, "_r3_classify") as classify, patch.object(st, "observe", return_value=None) as tree:
+            self.assertEqual(self.action(), 0)
+        classify.assert_not_called()
+        # Existing post-dispatch reaction observation remains; no diagnostic tree request.
+        tree.assert_called_once_with(with_image=False, display_id=0, foreground_out={})
+
+    def test_related_or_unknown_hierarchy_is_not_occlusion(self):
+        for depth in (3, None):
+            self.reset()
+            child = {"rect": [580, 880, 650, 930], "text": "child", "depth": depth}
+            self.reject({"nodes": [self.original, child]}, "unclassified", {}, "无法确认目标去向")
+
+    def test_equal_best_matches_are_unclassified(self):
+        self.reject({"nodes": [self.original, self.original]}, "unclassified", {}, "无法确认目标去向")
+
+    def test_smallest_target_preferred_over_clickable_ancestor(self):
+        self.reject({"nodes": [{"rect": [790, 890, 810, 910], "text": "label"}]},
+                    "target_shifted", {"center": [800, 900], "displacement_px": 200.0}, "目标已移到",
+                    old_nodes=[self.original, {"rect": [590, 890, 610, 910], "text": "label"}])
+
+    def test_clickable_breaks_equal_area_tie(self):
+        self.reject({"nodes": [{**self.original, "rect": [700, 850, 900, 950]}]},
+                    "target_shifted", {"center": [800, 900], "displacement_px": 200.0}, "目标已移到",
+                    old_nodes=[{"rect": self.original["rect"], "text": "other"}, self.original])
+
+    def test_changed_context_black_or_noninteractive_tree_is_unclassified(self):
+        for fields in ({"fg": "another/.Page"}, {"windowId": 11}, {"black": True}, {"interactive": False}):
+            self.reset()
+            self.reject({"nodes": [self.original], **fields}, "unclassified", {}, "无法确认目标去向")
+
+    def test_same_package_with_different_activity_is_valid_context(self):
+        self.reject({"fg": "test/.Other", "nodes": [{**self.original, "rect": [700, 850, 900, 950]}]},
+                    "target_shifted", {"center": [800, 900], "displacement_px": 200.0}, "目标已移到")
+
+    def test_invisible_original_is_not_indexed(self):
+        self.reject(None, "unclassified", {}, "无法确认目标去向",
+                    old_nodes=[{**self.original, "visibleToUser": False}], fetch=False)
+        self.assertEqual(json.loads(Path(self.cred + ".nodes.json").read_text()), [])
+
+    def test_invisible_new_target_does_not_compete_with_visible_match(self):
+        self.reject({"nodes": [{**self.original, "visibleToUser": False},
+                               {**self.original, "rect": [700, 850, 900, 950]}]},
+                    "target_shifted", {"center": [800, 900], "displacement_px": 200.0}, "目标已移到")
+
+    def test_identity_match_with_resize_is_not_disappeared(self):
+        for identity in ({"text": "private label"}, {"desc": "private description"}, {"viewId": "app:id/icon"}):
+            self.reset()
+            old = {"rect": [500, 850, 700, 950], **identity}
+            self.reject({"nodes": [{**old, "rect": [800, 850, 950, 950]}]},
+                        "unclassified", {}, "无法确认目标去向", old_nodes=[old])
+
+    def test_wrong_display_and_tree_error_are_unclassified(self):
+        for tree in ({"nodes": [self.original], "displayId": 7}, {"nodes": [], "coverage": "none"},
+                     {"nodes": [self.original], "err": "private error"}, {"nodes": [{}]}):
+            self.reset()
+            self.reject(tree, "unclassified", {}, "无法确认目标去向")
+
+    def test_virtual_display_tree_is_requested_once_without_fallback(self):
+        self.prepare()
+        with patch.object(st, "observe", return_value={"displayId": 7, "nodes": []}) as tree, \
+                patch.object(st, "dump_nodes") as fallback:
+            self.assertEqual(st._r3_classify(self.cred, 7, (600, 900)), ("unclassified", {}, ""))
+        tree.assert_called_once_with(with_image=False, display_id=7, timeout=1.0, transport_timeout=2.0)
+        fallback.assert_not_called()
+
+    def test_tree_exception_still_refuses(self):
+        self.reject(OSError("private tree failure"), "unclassified", {}, "无法确认目标去向")
+
+    def test_rounded_diff_still_classifies_rejected_comparison(self):
+        self.prepare()
+        with patch.object(st, "_r3_verify", return_value={"ok": False, "diff": st.R3_MAX_DIFF,
+                                                        "why": "diff=6.0>6.0"}), \
+                patch.object(st, "_r3_classify", return_value=("unclassified", {}, "")) as classify:
+            self.assertEqual(self.action(), 2)
+        classify.assert_called_once()
+
+    def test_write_failed_remains_observation_failure(self):
+        self.prepare()
+        with patch.object(st, "_r3_verify", return_value={"ok": False, "diff": None,
+                                                        "why": "capture_failed", "write_failed": True}), \
+                patch.object(st, "_r3_classify") as classify:
+            self.assertEqual(self.action(), 3)
+        classify.assert_not_called()
+        self.assertEqual(self.calls, [])
+
+    def test_uiautomator_retains_available_metadata_and_decodes_text(self):
+        xml = ('<hierarchy><node text="A &amp; B" bounds="[500,850][700,950]" '
+               'class="Button" resource-id="app:id/target" clickable="true" />'
+               '<node text="" bounds="[0,0][900,1000]" /></hierarchy>')
+        with patch.object(st, "sh", side_effect=["", xml]):
+            nodes = st.dump_nodes_uiautomator()
+        self.assertEqual(nodes, [{"text": "A &amp; B", "rect": [500, 850, 700, 950], "cx": 600, "cy": 900}])
+        self.assertEqual(nodes.index_nodes[0]["text"], "A & B")
+        self.assertEqual(nodes.index_nodes[0]["viewId"], "app:id/target")
+        self.prepare(nodes.index_nodes)
+        self.assertNotIn("A & B", Path(self.cred + ".nodes.json").read_text())
+
+    def test_uiautomator_collects_description_only_nodes(self):
+        xml = ('<hierarchy><node text="" content-desc="private icon &amp; label" '
+               'bounds="[500,850][700,950]" class="ImageButton" clickable="true" /></hierarchy>')
+        with patch.object(st, "sh", side_effect=["", xml]):
+            nodes = st.dump_nodes_uiautomator()
+        self.assertEqual(nodes, [])
+        self.assertEqual(nodes.index_nodes[0]["desc"], "private icon & label")
+        self.reject({"nodes": [{"rect": [700, 850, 900, 950], "desc": "private icon & label"}]},
+                    "target_shifted", {"center": [800, 900], "displacement_px": 200.0},
+                    "目标已移到", old_nodes=nodes.index_nodes)
+        raw = Path(self.cred + ".nodes.json").read_text()
+        self.assertNotIn("private icon", raw)
+        self.assertEqual(json.loads(raw)[0]["desc_sha256"],
+                         hashlib.sha256(b"private icon & label").hexdigest()[:16])
+
+    def test_batch_anchor_failure_unchanged(self):
+        self.prepare()
+        args = types.SimpleNamespace(shot="one", fast=True, display=0, _batch_anchor=self.cred)
+        with patch.object(st, "_r3_verify", return_value={"ok": False, "diff": 30., "why": "diff=30"}), \
+                patch.object(st, "_r3_classify") as classify, patch.object(st, "audit") as audit, \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(st.do_action(args, "tap", [(600, 900)]), 2)
+        classify.assert_not_called()
+        self.assertNotIn("r3_category", audit.call_args.args[0])
+        self.assertEqual(self.calls, [])
+
+    def test_observation_failure_does_not_classify(self):
+        self.prepare()
+        for why in ("capture_failed", "pil_unavailable", "compare_failed:OSError", "size 1x1 vs 2x2"):
+            with self.subTest(why=why), patch.object(st, "_r3_verify", return_value={
+                    "ok": False, "diff": None, "why": why}), patch.object(st, "observe") as tree, \
+                    patch.object(st, "audit") as audit:
+                self.assertEqual(self.action(), 2)
+                tree.assert_not_called()
+                self.assertNotIn("r3_category", audit.call_args.args[0])
+
+    def test_index_has_only_minimal_hashed_fields(self):
+        self.prepare()
+        raw = Path(self.cred + ".nodes.json").read_text()
+        self.assertNotIn(self.original["text"], raw)
+        self.assertEqual(json.loads(raw), [{"rect": self.original["rect"], "cls": "Button",
+                         "resource-id": "app:id/target", "clickable": True,
+                         "text_sha256": hashlib.sha256(self.original["text"].encode()).hexdigest()[:16]}])
+
+    def test_look_index_write_failure_is_best_effort(self):
+        output, err = io.StringIO(), io.StringIO()
+        real_open = st.os.open
+
+        def fail_index(path, *args, **kwargs):
+            if ".nodes.json.tmp-" in str(path):
+                raise OSError("private disk failure")
+            return real_open(path, *args, **kwargs)
+
+        with patch.object(st.os, "open", side_effect=fail_index), contextlib.redirect_stdout(output), \
+                contextlib.redirect_stderr(err):
+            self.assertEqual(st.cmd_look(types.SimpleNamespace(note="")), 0)
+        self.assertIn("shot_id", json.loads(output.getvalue()))
+        self.assertEqual(err.getvalue().count("目标索引未保存"), 1)
+        self.assertNotIn("private disk failure", err.getvalue())
 
 
 class TypeReceipt(unittest.TestCase):

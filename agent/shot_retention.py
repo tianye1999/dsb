@@ -7,6 +7,7 @@ import time
 
 
 _SHOT_NAME = re.compile(r"^(shot|before|after)-[0-9]+\.(jpg|jpeg|png)$")
+_INDEX_NAME = re.compile(r"^shot-[0-9]+\.(jpg|jpeg|png)\.nodes\.json$")
 _STAMP = ".retention-stamp"
 _LOCK = ".retention-lock"
 _INTERVAL = 6 * 3600
@@ -98,6 +99,7 @@ def _protected_names(directory, protect):
         path = os.path.abspath(os.fspath(item))
         if os.path.dirname(path) == parent:
             names.add(os.path.basename(path))
+            names.add(os.path.basename(path) + ".nodes.json")
     return names
 
 
@@ -140,27 +142,56 @@ def prune_shots(directory, days=None, dry_run=False, throttle=True, now=None,
         protected = _protected_names(directory, protect)
         cutoff = now - days * 86400
         considered = 0
+
+        def remove(name, info):
+            if not dry_run:
+                os.unlink(name, dir_fd=dirfd)
+            result["deleted"] += 1
+            result["bytes"] += info.st_size
+
         with os.scandir(dirfd) as entries:
             for entry in entries:
-                if considered >= max_files or time.monotonic() >= deadline:
+                if time.monotonic() >= deadline:
                     result["truncated"] = True
                     break
                 result["scanned"] += 1
-                if not _SHOT_NAME.fullmatch(entry.name):
+                is_index = bool(_INDEX_NAME.fullmatch(entry.name))
+                if not is_index and not _SHOT_NAME.fullmatch(entry.name):
                     continue
                 try:
                     info = os.stat(entry.name, dir_fd=dirfd, follow_symlinks=False)
                     if not stat.S_ISREG(info.st_mode):
                         continue
-                    if entry.name in protected or not eligible(entry.name, info.st_mode,
-                                                               info.st_mtime, cutoff):
+                    if entry.name in protected:
                         result["kept"] += 1
                         continue
+                    if is_index:
+                        try:
+                            os.stat(entry.name[:-len(".nodes.json")], dir_fd=dirfd, follow_symlinks=False)
+                        except FileNotFoundError:
+                            if info.st_mtime < cutoff:
+                                remove(entry.name, info)  # Orphans do not consume screenshot slots.
+                            else:
+                                result["kept"] += 1
+                        continue
+                    if info.st_mtime >= cutoff:
+                        result["kept"] += 1
+                        continue
+                    if considered >= max_files:
+                        result["truncated"] = True
+                        break
                     considered += 1
-                    if not dry_run:
-                        os.unlink(entry.name, dir_fd=dirfd)
-                    result["deleted"] += 1
-                    result["bytes"] += info.st_size
+                    remove(entry.name, info)
+                    sidecar = entry.name + ".nodes.json"
+                    if _INDEX_NAME.fullmatch(sidecar) and sidecar not in protected:
+                        try:
+                            side_info = os.stat(sidecar, dir_fd=dirfd, follow_symlinks=False)
+                        except FileNotFoundError:
+                            continue
+                        if stat.S_ISREG(side_info.st_mode):
+                            remove(sidecar, side_info)  # Same lifecycle, even if its mtime is newer.
+                except FileNotFoundError:
+                    continue
                 except OSError:
                     result["errors"] += 1
         if time.monotonic() >= deadline:
@@ -199,7 +230,12 @@ def directory_usage(directory, now=None, max_entries=5000, max_seconds=3.0):
         oldest = None
         with os.scandir(dirfd) as entries:
             for entry in entries:
-                if result["scanned"] >= max_entries or time.monotonic() >= deadline:
+                if time.monotonic() >= deadline:
+                    result["truncated"] = True
+                    break
+                if _INDEX_NAME.fullmatch(entry.name):
+                    continue
+                if result["scanned"] >= max_entries:
                     result["truncated"] = True
                     break
                 result["scanned"] += 1

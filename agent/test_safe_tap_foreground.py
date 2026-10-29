@@ -36,7 +36,11 @@ class Foreground(unittest.TestCase):
                             patch.object(st, "_settle_stable", return_value=(0, 1, True)) as settle:
                         self.assertEqual(self.invoke(kind, fast), 2)
                     self.assertEqual(self.calls, [])
-                    self.assertEqual(st.load_state(), before)
+                    after = st.load_state()
+                    incident = after.pop("open_incident")
+                    self.assertEqual((incident["kind"], incident["reason_code"], incident["consecutive"]),
+                                     (kind, "G1_FOREGROUND", 1))
+                    self.assertEqual(after, before)
                     settle.assert_not_called()
                     audit.assert_called_once()
                     record = audit.call_args.args[0]

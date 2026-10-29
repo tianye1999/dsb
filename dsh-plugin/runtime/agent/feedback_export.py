@@ -169,6 +169,8 @@ def redact(value, depth=0):
     unknown = []
     known = set(ENUMS) | BOOL_FIELDS | NUMBER_FIELDS | OBJECT_FIELDS | LIST_FIELDS | APP_FIELDS | ACTIVITY_FIELDS | TIME_FIELDS | ID_FIELDS | FREE_TEXT_FIELDS
     for key, item in value.items():
+        if key == "shot_dhash":
+            continue  # Local-only similarity evidence; preserve the pre-N3 export shape.
         if key in known:
             result[key] = _redact_field(key, item, value, depth)
         else:

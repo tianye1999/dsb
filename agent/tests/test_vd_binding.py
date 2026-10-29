@@ -276,7 +276,11 @@ class VdGateTests(_GateBase):
         rc, calls = self.action()
         self.assertEqual(rc, 2)
         self.assertEqual(calls, [])
-        self.assertEqual(st.load_state(), before)
+        after = st.load_state()
+        incident = after.pop("open_incident")
+        self.assertEqual((incident["kind"], incident["reason_code"], incident["display_id"]),
+                         ("tap", "G2B_ACK", 36))
+        self.assertEqual(after, before)
 
     def test_empty_tree_look_issues_display_bound_credential(self):
         obs = {"image": True, "jpg": "synthetic.jpg", "displayId": 36,
@@ -341,7 +345,11 @@ class VdGateTests(_GateBase):
                     rc, calls = self.action("key", (code,), ack=True)
                 self.assertEqual(rc, 2)
                 self.assertEqual(calls, [])
-                self.assertEqual(st.load_state(), before)
+                after = st.load_state()
+                incident = after.pop("open_incident")
+                self.assertEqual((incident["kind"], incident["reason_code"], incident["display_id"]),
+                                 ("key", "G2B_KEY", 36))
+                self.assertEqual(after, before)
 
     def test_empty_tree_visual_impact_controls_tap_and_long_press(self):
         verdicts = [{"status": "ok", "impact": impact}
