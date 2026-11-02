@@ -11,9 +11,9 @@ description: 操控这台 Android 手机时必读（触发词：点/滑/截图/�
    先 `python3 /root/.dsh-phone/skills/safe_tap.py open --app 淘宝 --vd`（或在跑 vd_session.py start），
    拿到 `display_id` 后 **look/tap 全部带 `--display N`**，收工 `vd_session.py stop`。
    主屏上的动作会被直接拒绝（`vd_policy=vd_required`），除非目标是逗沙包 App / 系统 UI / 桌面，
-   或显式 `--allow-main --why "原因"`（进审计）。裸 `adbq.sh shell "input tap …"` 也会被拦。
+   或显式 `--allow-main --why "原因"`（进审计）。adbq 按命令词拦裸 input，含 `-d N`、绝对路径、包装命令和空白变体；`dumpsys input` 等参数不受影响。
    **主屏不许切走用户正在看的 App**——这是这条规矩的由来。
-1. **屏幕上一切点击/滑动/按键必须走 safe_tap.py 闸门**（G1 凭据90s / G2 危险禁区 / G3 边缘禁带 / G4 熔断 / G5 前后留证）。禁止裸 input tap/swipe/keyevent。
+1. **屏幕上一切点击/滑动/按键必须走 safe_tap.py 闸门**（G1 凭据90s / G2 危险禁区 / G3 边缘禁带 / G4 熔断 / G5 前后留证）。禁止裸 input 的任何子命令。守卫只防诚实误用，不是同用户安全边界；诊断开关 `SAFE_TAP_ALLOW_RAW_INPUT=1` **只对 adbq 生效**，放行时会在 stderr 醒目告警，不能绕过 dsb_run 的脚本源码检查。
 2. **先 look 拿凭据，再动作，点完必须复核**（看 JSON 的 ui_reacted / activity_after，别只看 rc）。
    `look` 的 `open_incident` 非空表示本任务还有未解决的拒绝或失败：**不要原样重试同一动作**，按 `reason_code` 重新观察、改用合规办法或请求人工接管，不得绕过闸门。`consecutive` 持续升高时停下说明原因码、已尝试的方法和需要的帮助。只有后续动作派发完成且 `ui_reacted=true` 才清除；这不代表任务目标已完成。
    R3 拒绝后，`open_incident.r3_category` 若为 `target_shifted`，重新 `look` 后按新位置重新决策；`target_occupied` 先处理遮挡物或等待；`target_disappeared` 重新确认页面；`unclassified` 表示证据不足，重新观察。分类及新中心点只是诊断，不是新凭据，所有分类仍然拒绝，不得直接套新坐标或原样重试。

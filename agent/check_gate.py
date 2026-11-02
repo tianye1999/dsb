@@ -5,7 +5,7 @@
 设计来源：生态调研里的 y0usaf/pi-jev（同款思路），但按本机实测做了三处关键改动：
   1. **用 classify 而不是 check**：实测同一条 `pm uninstall`，
      问「这算危险吗」= 0.75（会被 0.9 阈值漏掉），问「这是什么类型的操作」= 1.00。
-  2. **确定性白名单先行**：明显只读的命令（dumpsys/screencap/input tap 等）直接放行，
+  2. **确定性白名单先行**：明显只读的命令（dumpsys/screencap 等）直接放行，
      不问 Jev，省钱也省网络抖动风险。
   3. **fail-open**：Jev 不可用/超时 → 放行，绝不让判定层卡死手机代理。
 
@@ -39,8 +39,7 @@ AUDIT = os.environ.get("DSB_AUDIT_FILE", os.path.join(os.path.dirname(__file__),
 # ---- 明显只读 / 低风险：直接放行，不问模型 ----
 READ_ONLY_PATTERNS = [
     r"\bdumpsys\b", r"\bscreencap\b", r"\bcat\b", r"\bls\b", r"\bpm list\b",
-    r"\binput keyevent\b", r"\binput tap\b", r"\binput swipe\b", r"\binput text\b",
-    r"\bam start\b", r"\bmonkey\b", r"\bwm size\b", r"\bgetprop\b", r"\bping\b",
+    r"\bam start\b", r"\bwm size\b", r"\bgetprop\b", r"\bping\b",
     r"\bcurl\b", r"\bnode\b.*--selftest", r"jev_client\.py",
 ]
 

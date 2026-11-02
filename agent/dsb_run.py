@@ -28,10 +28,11 @@
     4. 学到的新组合写进 agent_workspace/agent_helpers.py（下次自动加载）
 
 安全边界：
-    脚本源码禁止 subprocess / os.system / eval( / exec( / __import__ / 裸 "input tap|swipe|keyevent"
+    脚本源码禁止 subprocess / os.system / eval( / exec( / __import__ / 字符串中的裸 input 命令词
     （一切屏幕动作必须走闸门助手）；助手调用数超过 --max-actions 或墙钟超时 → 终止并打印轨迹。
 """
 import argparse
+import ast
 import contextlib
 import fcntl
 import io
@@ -47,11 +48,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import safe_tap as st            # noqa: E402
 import task_status              # noqa: E402
+from raw_input_guard import has_raw_input, python_command_candidates  # noqa: E402
 
 MAX_ACTIONS_DEFAULT = 60
 MAX_SCRIPT_BYTES = 200_000
-_FORBIDDEN = ("subprocess", "os.system", "eval(", "exec(", "__import__",
-              "input tap", "input swipe", "input keyevent")
+_FORBIDDEN = ("subprocess", "os.system", "eval(", "exec(", "__import__")
 
 stats = {"actions": 0, "reads": 0, "errors": 0, "duration_s": 0.0}
 trace = []
@@ -456,12 +457,16 @@ def _load_agent_helpers(path, g):
 
 def _source_guard(path):
     """脚本源码安全扫描：禁止绕过闸门的裸输入/危险调用。"""
-    src = open(path, encoding="utf-8", errors="replace").read()
-    bad = [p for p in _FORBIDDEN if p in src]
-    if bad:
-        raise RuntimeError("脚本包含被禁止的调用 %s —— 屏幕动作必须走闸门助手" % bad)
+    with open(path, encoding="utf-8", errors="replace") as stream:
+        src = stream.read()
     if len(src.encode("utf-8")) > MAX_SCRIPT_BYTES:
         raise RuntimeError("脚本过大（>%d 字节）" % MAX_SCRIPT_BYTES)
+    bad = [p for p in _FORBIDDEN if p in src]
+    if not bad and any(has_raw_input(command) for _, command in
+                       python_command_candidates(ast.parse(src, filename=str(path)))):
+        bad.append("input (command word)")
+    if bad:
+        raise RuntimeError("脚本包含被禁止的调用 %s —— 屏幕动作必须走闸门助手" % bad)
 
 
 def _intents(src):

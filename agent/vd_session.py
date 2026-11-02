@@ -39,12 +39,12 @@ SESSION_FILE = os.path.join(HERE, "vd_session.json")
 ADB = ["bash", "/data/data/com.termux/files/home/dsb/adbq.sh"]
 # 2026-10-21 提速：adbq.sh 是"一次往返发「橙」+ 一次往返跑命令"（实测 0.30s）。shell 命令改成把
 # 同一条「橙」广播和命令放进**同一次**远端 shell（0.17s）：每次照样先同步点橙，不留任何缓存状态。
-# adbq 拒绝裸 input 的那几种写法仍交给 adbq（照旧拒绝）；非 shell 命令也仍走 adbq。
+# 裸 input 命令词交给 adbq 拒绝（含 -d、路径、包装命令）；非 shell 命令也仍走 adbq。
 from adb_endpoint import adb_command, adb_target
+from raw_input_guard import has_raw_input
 ADB_RAW = ["/data/data/com.termux/files/usr/bin/adb", "-s", "127.0.0.1:5555"]
 ORANGE_SH = ("am broadcast -n com.dsb.assistant/.CmdReceiver -a com.dsb.assistant.CMD "
              "--es token dsh-8f3a2c --es cmd '橙' >/dev/null 2>&1; ")
-ADBQ_GUARDED = (" input tap ", " input swipe ", " input keyevent ", " input text ", " input touchscreen ")
 OVERLAY_KEY = "overlay_display_devices"
 DEFAULT_TTL = 900
 SIZE_RE = re.compile(r"real (\d+) x (\d+)")
@@ -60,17 +60,38 @@ class VDError(Exception):
 
 def _adb_argv(args):
     """adb shell 本来就是把参数按空格拼成一条远端命令；这里在前面拼上「橙」，等价于 adbq 的先点橙后执行。"""
-    joined = " ".join(str(a) for a in args)
+    remote = " ".join(str(a) for a in args[1:])
     # args[1] 以 "-" 开头是 adb 客户端选项（-T/-n/-x…），不能拼进远端命令 → 仍交给 adbq
     if len(args) > 1 and args[0] == "shell" and not str(args[1]).startswith("-") \
-            and not any(g in " %s " % joined for g in ADBQ_GUARDED):
-        return adb_command(ADB_RAW[0]) + ["shell", ORANGE_SH + " ".join(str(a) for a in args[1:])]
+            and not has_raw_input(remote):
+        return adb_command(ADB_RAW[0]) + ["shell", ORANGE_SH + remote]
     return ADB + [str(a) for a in args]
 
 
 def adb(*args, t=20, checked=True):
+    return _run_adb(lambda: _adb_argv(args), t=t, checked=checked)
+
+
+def _adb_internal_wake(did):
+    """Fixed lifecycle WAKEUP, not an arbitrary-command bypass for callers.
+
+    A sleeping virtual display cannot supply the observation needed by safe_tap.
+    Only revive uses this internal channel; no CLI flag or adb() argument exposes
+    it. Same-UID Python can still import it: this is not a security boundary.
+    """
+    def argv():
+        display_id = int(did)
+        if display_id <= 0:
+            raise VDError("wake_requires_virtual_display")
+        remote = "input -d %d keyevent 224" % display_id
+        return adb_command(ADB_RAW[0]) + ["shell", ORANGE_SH + remote]
+    return _run_adb(argv, t=10, checked=False)
+
+
+def _run_adb(make_argv, *, t, checked):
     try:
-        r = subprocess.run(_adb_argv(args), capture_output=True, timeout=t)
+        # Endpoint selection and process launch share the original error contract.
+        r = subprocess.run(make_argv(), capture_output=True, timeout=t)
     except subprocess.TimeoutExpired:
         raise VDError("adb_timeout")
     except FileNotFoundError:
@@ -518,7 +539,7 @@ def _revive_on_display(did, package):
     if not did or not package:
         return ""
     try:
-        adb("shell", "input", "-d", str(did), "keyevent", "224", t=10, checked=False)
+        _adb_internal_wake(did)
         time.sleep(1.0)
         if (foreground(did) or "").split("/")[0] == package:
             return "wake"

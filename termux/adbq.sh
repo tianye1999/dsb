@@ -15,12 +15,195 @@
 #
 # 用法：
 #   bash ~/dsb/adbq.sh shell "dumpsys power | grep mWakefulness"   # 只读查询
-#   ❌ 不要再 `input tap/swipe/keyevent`：点击一律走 safe_tap.py（虚拟屏优先）
+#   ❌ 不要把 input 当命令执行（含 -d、绝对路径、任意子命令）；屏幕动作走 safe_tap.py。
 #   bash ~/dsb/adbq.sh shell "am start -n com.tencent.mm/.ui.LauncherUI"
 #   bash ~/dsb/adbq.sh exec-out screencap -p > /tmp/x.png
 #   bash ~/dsb/adbq.sh 蓝            # 只回蓝
 #   bash ~/dsb/adbq.sh 状态          # 看球状态
 set -u
+
+# Honest-mistake guard only. Keep in sync with agent/raw_input_guard.py and
+# agent/tests/raw_input_cases.json. Pure Bash: no subprocess on the hot path.
+# Quotes preserve literal words; only substitutions and shell programs recurse.
+adbq_has_raw_input() {
+  local text="$*"
+  # Linear fast path. Split spellings such as in\put intentionally pass:
+  # adversarial obfuscation is outside this honest-mistake guard's scope.
+  [[ "$text" == *input* ]] || return 1
+  _raw_input_scan "$text"
+}
+
+# These helpers use Bash's dynamic local scope. Each recursive scan owns its
+# word buffer/token arrays; RAW_INPUT_END returns only the closing position.
+_raw_input_flush() {
+  if (( active )); then
+    ri_words+=("$word")
+    ri_kinds+=(word)
+  fi
+  word='' active=0
+}
+
+_raw_input_scan() {
+  # Syntax is ASCII; UTF-8 bytes cannot collide with it. Do not change callers' locale.
+  local LC_ALL=C
+  local text=$1 i=${2:-0} end=${3:-} char following quote='' word=''
+  local active=0 depth=0
+  local -a ri_words=() ri_kinds=()
+  while (( i < ${#text} )); do
+    char=${text:i:1}
+    if [[ -z "$quote" && -n "$end" && "$char" == "$end" ]] && (( depth == 0 )); then
+      i=$((i + 1))
+      break
+    fi
+    if [[ "$quote" == "'" ]]; then
+      if [[ "$char" == "'" ]]; then quote=''; else word+=$char; fi
+      i=$((i + 1))
+      continue
+    fi
+    if [[ "$char" == "\\" ]] && (( i + 1 < ${#text} )); then
+      following=${text:i+1:1}
+      if [[ -z "$quote" || "$following" == [\$\`\"\\] || "$following" == $'\n' ]]; then
+        if [[ "$following" != $'\n' ]]; then word+=$following; active=1; fi
+        i=$((i + 2))
+        continue
+      fi
+    fi
+    if [[ "${text:i:2}" == "\$(" || "$char" == '`' ]]; then
+      if [[ "$char" == '$' ]]; then
+        _raw_input_scan "$text" "$((i + 2))" ')' && return 0
+      else
+        _raw_input_scan "$text" "$((i + 1))" '`' && return 0
+      fi
+      i=$RAW_INPUT_END
+      word+="\${sub}" active=1
+      continue
+    fi
+    if [[ "$quote" == '"' ]]; then
+      if [[ "$char" == '"' ]]; then quote=''; else word+=$char; fi
+      i=$((i + 1))
+      continue
+    fi
+    case "$char" in
+      "'"|'"') quote=$char; active=1 ;;
+      '#')
+        if (( active == 0 )); then
+          while (( i < ${#text} )) && [[ "${text:i:1}" != $'\n' ]]; do i=$((i + 1)); done
+          continue
+        fi
+        word+=$char ;;
+      ' '|$'\t'|$'\r') _raw_input_flush ;;
+      ';'|'&'|'|'|'('|')'|$'\n')
+        _raw_input_flush
+        if [[ "$char" == '(' ]]; then depth=$((depth + 1))
+        elif [[ "$char" == ')' ]] && (( depth > 0 )); then depth=$((depth - 1))
+        fi
+        ri_words+=("$char"); ri_kinds+=(boundary) ;;
+      '<'|'>')
+        if [[ "$word" =~ ^[0-9]+$ ]]; then word=''; active=0; fi
+        _raw_input_flush
+        while (( i + 1 < ${#text} )); do
+          case "${text:i+1:1}" in
+            '<'|'>'|'&'|'|') i=$((i + 1)) ;;
+            *) break ;;
+          esac
+        done
+        ri_words+=("$char"); ri_kinds+=(redirect) ;;
+      *) word+=$char; active=1 ;;
+    esac
+    i=$((i + 1))
+  done
+  _raw_input_flush
+  # Nested program scans may overwrite RAW_INPUT_END, so publish after them.
+  if _raw_input_words; then RAW_INPUT_END=$i; return 0; fi
+  RAW_INPUT_END=$i
+  return 1
+}
+
+_raw_input_words() {
+  local n word kind base state='command' redirect=0
+  for ((n=0; n<${#ri_words[@]}; n++)); do
+    word=${ri_words[n]} kind=${ri_kinds[n]}
+    base=${word##*/}
+    if [[ "$kind" == word && "$state" == su_command ]] && (( redirect == 0 )); then
+      if [[ "$word" =~ ^-[a-zA-Z]*c[a-zA-Z]*$ ]]; then state=c_arg; continue; fi
+      [[ "$word" == -* ]] && continue
+      state='command'
+    fi
+    if [[ "$kind" == boundary ]]; then
+      state='command' redirect=0
+    elif [[ "$kind" == redirect ]]; then
+      redirect=1
+    elif (( redirect )); then
+      redirect=0
+    elif [[ "$state" == adb ]]; then
+      case "$word" in
+        shell|exec-out) state=remote ;;
+        push|pull) state=args ;;
+      esac
+    elif [[ "$state" == c_arg ]]; then
+      adbq_has_raw_input "$word" && return 0
+      state=args
+    elif [[ "$state" == shell_c || "$state" == su ]]; then
+      if [[ "$word" =~ ^-[a-zA-Z]*c[a-zA-Z]*$ ]]; then state=c_arg
+      elif [[ "$word" == -* ]]; then continue
+      elif [[ "$base" == adbq.sh ]]; then state=adb
+      elif [[ "$state" == su ]]; then state=su_command
+      else state=args
+      fi
+    elif [[ "$state" == timeout ]]; then
+      [[ "$word" != -* ]] && state='command'
+    elif [[ "$state" == command || "$state" == remote ]]; then
+      [[ "$word" =~ ^[a-zA-Z_][a-zA-Z0-9_]*= || "$word" == -* ]] && continue
+      if [[ "$state" == remote && "$word" =~ [[:space:]] ]]; then
+        adbq_has_raw_input "$word" && return 0
+        state=args
+        continue
+      fi
+      case "$base" in
+        input) return 0 ;;
+        cmd|exec|nohup|env|command|busybox|toybox|time|do|then|else|elif|'{'|'!'|if|while|until) state='command' ;;
+        shell|exec-out) state=remote ;;
+        sh|bash) state=shell_c ;;
+        su|timeout) state=$base ;;
+        adb|adbq.sh) state=adb ;;
+        *) state=args ;;
+      esac
+    fi
+  done
+  return 1
+}
+
+adbq_check_raw_input() {
+  # Callers supply adb arguments, so selectors must not consume a command slot.
+  if adbq_has_raw_input adb "$@"; then
+    if [[ "${SAFE_TAP_ALLOW_RAW_INPUT:-0}" == 1 ]]; then
+      printf '!!! WARNING: SAFE_TAP_ALLOW_RAW_INPUT=1 bypasses the raw input guard: %s\n' "$*" >&2
+    else
+      printf '⛔ adbq 拒绝裸 input：%s\n' "$*" >&2
+      echo "  → 屏幕动作请用 safe_tap.py（虚拟屏：先 vd_session.py start，再 look/tap --display N）" >&2
+      echo "  → 确需诊断绕过：SAFE_TAP_ALLOW_RAW_INPUT=1 bash ~/dsb/adbq.sh ..." >&2
+      return 2
+    fi
+  fi
+}
+
+# Explicit test command precedes endpoint discovery; ambient variables cannot
+# silently turn normal invocations into selftests.
+if [[ "${1:-}" == --raw-input-selftest ]]; then
+  mode=${2:-}
+  [[ $# -ge 2 ]] || { echo 'selftest requires adb|command|guard' >&2; exit 2; }
+  shift 2
+  case "$mode" in
+    adb) if adbq_has_raw_input adb "$@"; then echo blocked; else echo allowed; fi ;;
+    command) if adbq_has_raw_input "$@"; then echo blocked; else echo allowed; fi ;;
+    guard) adbq_check_raw_input "$@"; exit $? ;;
+    *) echo 'selftest requires adb|command|guard' >&2; exit 2 ;;
+  esac
+  exit 0
+fi
+
+# Resolved relative to this script on-device; lint the endpoint helper separately.
+# shellcheck disable=SC1091
 source "$(dirname "${BASH_SOURCE[0]}")/adb-target.sh"
 ADB=("${DSB_ADB_COMMAND[@]}" "${DSB_ADB_SELECTOR[@]}")
 
@@ -58,17 +241,9 @@ esac
 # ★ 2026-10-20 用户规矩（虚拟屏强制）：
 #   ① 所有「别的 App 的界面」操作必须在虚拟屏上（vd_session.py start → look/tap --display N）；
 #   ② 屏幕动作只能走 safe_tap.py 闸门，不许裸 input。
-#   这里挡第 ② 条：`adbq.sh shell "input tap ..."` 会被拒绝。
+#   这里按命令词挡第 ② 条：含 -d、路径、空白变体、包装命令的 input 都拒绝。
 #   真需要绕过（极少数诊断）：SAFE_TAP_ALLOW_RAW_INPUT=1 bash adbq.sh ...
-case " $* " in
-  *" input tap "*|*" input swipe "*|*" input keyevent "*|*" input text "*|*" input touchscreen "*)
-    if [ "${SAFE_TAP_ALLOW_RAW_INPUT:-0}" != "1" ]; then
-      printf '⛔ adbq 拒绝裸 input：%s\n' "$*" >&2
-      echo "  → 点击/滑动/按键请用 safe_tap.py（虚拟屏：先 vd_session.py start --package <pkg>，再 look/tap --display N）" >&2
-      echo "  → 确需绕过：SAFE_TAP_ALLOW_RAW_INPUT=1 bash ~/dsb/adbq.sh ..." >&2
-      exit 2
-    fi ;;
-esac
+adbq_check_raw_input "$@" || exit $?
 
 ball "橙"                       # ← 关键：任何 adb 操作前先点亮
 exec "${ADB[@]}" "$@"

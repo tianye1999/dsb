@@ -845,10 +845,38 @@ class OrangeInSameShellTests(unittest.TestCase):
     def test_adbq_guarded_input_and_non_shell_still_go_through_adbq(self):
         vd.adb("shell", "input", "tap", "1", "2", checked=False)
         vd.adb("shell", "input keyevent 4", checked=False)
+        vd.adb("shell", "input", "-d", "3", "keyevent", "224", checked=False)
+        vd.adb("shell", "/system/bin/input  tap 1 2", checked=False)
+        vd.adb("shell", 'sh -c "input motionevent DOWN 1 2"', checked=False)
         vd.adb("forward", "tcp:1", "tcp:2", checked=False)
         vd.adb("shell", "-T", "true", checked=False)       # adb 客户端选项不能被拼进远端命令
-        self.assertEqual(len(self.argv), 4)
+        self.assertEqual(len(self.argv), 7)
         self.assertTrue(all(c[:len(vd.ADB)] == vd.ADB for c in self.argv), self.argv)
+
+    def test_internal_wake_is_fixed_and_still_lights_orange(self):
+        vd._adb_internal_wake(42)
+        self.assertEqual(self.argv[0][:len(vd.ADB_RAW)], vd.ADB_RAW)
+        self.assertEqual(self.argv[0][-1], vd.ORANGE_SH + "input -d 42 keyevent 224")
+        for bad in (0, -1, "3; input tap 1 2"):
+            with self.assertRaises((vd.VDError, ValueError)):
+                vd._adb_internal_wake(bad)
+        self.assertEqual(len(self.argv), 1)
+
+    def test_endpoint_errors_are_normalized_for_both_routes(self):
+        from adb_endpoint import EndpointUnavailable
+        for error in (EndpointUnavailable("paused"), RuntimeError("broken route")):
+            with patch.object(vd, "adb_command", side_effect=error):
+                for call in (lambda: vd.adb("shell", "dumpsys", "display"),
+                             lambda: vd._adb_internal_wake(42)):
+                    with self.subTest(error=error, call=call), self.assertRaisesRegex(vd.VDError, "adb_error:"):
+                        call()
+        self.assertEqual(self.argv, [])
+
+    def test_revive_uses_internal_wake(self):
+        with patch.object(vd.time, "sleep"), \
+                patch.object(vd, "foreground", return_value="com.example/.Main"):
+            self.assertEqual(vd._revive_on_display(42, "com.example"), "wake")
+        self.assertEqual(self.argv[0][-1], vd.ORANGE_SH + "input -d 42 keyevent 224")
 
 
 class ScrcpyStartSafetyTests(unittest.TestCase):
